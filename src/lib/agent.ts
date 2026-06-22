@@ -10,6 +10,7 @@ export type ToolStatus = "running" | "done" | "error" | "denied";
 export type AgentItem =
   | { kind: "user"; content: string }
   | { kind: "assistant"; content: string }
+  | { kind: "thought"; label: string; model: string; content: string }
   | {
       kind: "tool";
       name: string;

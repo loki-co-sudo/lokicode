@@ -31,6 +31,10 @@ pub enum StreamEvent {
 struct Settings {
     api_key: Option<String>,
     model: Option<String>,
+    /// Cheap model used for the recurrent-depth thinking/reflection phases.
+    thinking_model: Option<String>,
+    /// High-performance model used for the final synthesis phase.
+    synthesis_model: Option<String>,
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -75,6 +79,9 @@ pub struct SettingsStatus {
     pub model: String,
     /// "config" | "env" | "none" — where the active key comes from.
     pub key_source: String,
+    /// Empty string if unset (falls back to `model`).
+    pub thinking_model: String,
+    pub synthesis_model: String,
 }
 
 #[tauri::command]
@@ -91,6 +98,8 @@ pub fn get_settings(app: AppHandle) -> SettingsStatus {
         has_key,
         model: resolve_model(&app),
         key_source: key_source.to_string(),
+        thinking_model: cfg.thinking_model.unwrap_or_default(),
+        synthesis_model: cfg.synthesis_model.unwrap_or_default(),
     }
 }
 
@@ -99,6 +108,8 @@ pub fn save_settings(
     app: AppHandle,
     api_key: Option<String>,
     model: Option<String>,
+    thinking_model: Option<String>,
+    synthesis_model: Option<String>,
 ) -> Result<(), String> {
     let mut cfg = load_settings(&app);
     if let Some(k) = api_key {
@@ -106,6 +117,12 @@ pub fn save_settings(
     }
     if let Some(m) = model {
         cfg.model = if m.trim().is_empty() { None } else { Some(m) };
+    }
+    if let Some(m) = thinking_model {
+        cfg.thinking_model = if m.trim().is_empty() { None } else { Some(m) };
+    }
+    if let Some(m) = synthesis_model {
+        cfg.synthesis_model = if m.trim().is_empty() { None } else { Some(m) };
     }
     let path = config_path(&app)?;
     if let Some(parent) = path.parent() {
@@ -154,6 +171,47 @@ pub async fn list_models() -> Result<Vec<ModelInfo>, String> {
         .unwrap_or_default();
     models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
+}
+
+/// Plain non-streaming completion with an explicit model override. Used by the
+/// recurrent-depth reasoning core (draft / reflection / synthesis phases), each of
+/// which may run on a different model (cost-efficient routing).
+#[tauri::command]
+pub async fn complete(
+    app: AppHandle,
+    messages: serde_json::Value,
+    model: Option<String>,
+) -> Result<String, String> {
+    let Some(key) = resolve_key(&app) else {
+        return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
+    };
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| resolve_model(&app));
+
+    let body = serde_json::json!({ "model": model, "messages": messages });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(API_URL)
+        .bearer_auth(key)
+        .header("HTTP-Referer", "http://localhost")
+        .header("X-Title", "lokicode")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("通信エラー: {e}"))?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
+        return Err(format!("OpenRouter エラー (HTTP {status}): {detail}"));
+    }
+    Ok(json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string())
 }
 
 /// One non-streaming completion that supports tool calling. Returns the raw

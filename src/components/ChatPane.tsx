@@ -17,6 +17,7 @@ import {
   type AgentItem,
   type ToolStatus,
 } from "../lib/agent";
+import { runRecurrentReasoning, MAX_DEPTH } from "../lib/reasoning";
 import { loadItems, saveItems, clearItems } from "../lib/chatStorage";
 import Markdown from "./Markdown";
 import ModelPicker from "./ModelPicker";
@@ -114,6 +115,28 @@ function ToolCard({
   );
 }
 
+function ThoughtCard({ item }: { item: Extract<AgentItem, { kind: "thought" }> }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-md border border-indigo-800/50 bg-indigo-950/20">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs"
+      >
+        <span>🧠</span>
+        <span className="font-medium text-indigo-300">{item.label}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-neutral-500">{item.model}</span>
+        <span className="text-[11px] text-neutral-500">{open ? "閉じる" : "思考を見る"}</span>
+      </button>
+      {open && (
+        <div className="border-t border-indigo-800/40 px-3 py-2 text-neutral-300">
+          <Markdown content={item.content} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   { onOpenSettings, settingsVersion, currentCode, currentFileName, currentFilePath },
   ref,
@@ -124,9 +147,16 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [error, setError] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(true);
   const [model, setModel] = useState("");
+  const [thinkingModel, setThinkingModel] = useState("");
+  const [synthesisModel, setSynthesisModel] = useState("");
   const [includeFile, setIncludeFile] = useState(false);
   const [agentMode, setAgentMode] = useState(true);
   const [autoApprove, setAutoApprove] = useState(false);
+  const [deepReasoning, setDeepReasoning] = useState(false);
+  const [depth, setDepth] = useState<number>(() => {
+    const v = Number(localStorage.getItem("lokicode.depth"));
+    return v >= 1 && v <= MAX_DEPTH ? v : 4;
+  });
   const [pending, setPending] = useState<PendingApproval | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -143,6 +173,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       .then((s) => {
         setHasKey(s.hasKey);
         setModel(s.model);
+        setThinkingModel(s.thinkingModel);
+        setSynthesisModel(s.synthesisModel);
       })
       .catch(() => {});
   }, [settingsVersion]);
@@ -150,6 +182,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   useEffect(() => {
     saveItems(items);
   }, [items]);
+
+  useEffect(() => {
+    localStorage.setItem("lokicode.depth", String(depth));
+  }, [depth]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -175,7 +211,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   async function handleModelChange(id: string) {
     setModel(id);
     try {
-      await saveSettings(undefined, id);
+      await saveSettings({ model: id });
     } catch {
       // ignore
     }
@@ -207,7 +243,17 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     base.push(...history, { role: "user", content: text });
 
     try {
-      if (agentMode) {
+      if (deepReasoning) {
+        await runRecurrentReasoning(
+          base,
+          { depth, thinkingModel: thinkingModel || undefined, synthesisModel: synthesisModel || undefined },
+          {
+            onThought: (label, m, content) =>
+              appendItem({ kind: "thought", label, model: m, content }),
+            onFinal: (text) => appendItem({ kind: "assistant", content: text }),
+          },
+        );
+      } else if (agentMode) {
         await runAgent(
           base,
           {
@@ -292,6 +338,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         )}
         {items.map((it, i) => {
           if (it.kind === "tool") return <ToolCard key={i} item={it} />;
+          if (it.kind === "thought") return <ThoughtCard key={i} item={it} />;
           const isUser = it.kind === "user";
           return (
             <div key={i} className={isUser ? "flex justify-end" : "flex justify-start"}>
@@ -342,15 +389,36 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       )}
 
       <div className="border-t border-neutral-800 p-3">
-        <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-400">
-          <label className="flex items-center gap-1.5">
-            <input type="checkbox" checked={agentMode} onChange={(e) => setAgentMode(e.target.checked)} className="accent-blue-600" />
-            エージェント（ツール使用）
+        <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-400">
+          <label className="flex items-center gap-1.5" title="再帰深度ループで思考を反復してから回答します">
+            <input type="checkbox" checked={deepReasoning} onChange={(e) => setDeepReasoning(e.target.checked)} className="accent-indigo-500" />
+            🧠 ディープ推論
           </label>
-          <label className="flex items-center gap-1.5" title="承認なしで書き込み・コマンドを実行します（注意）">
-            <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} disabled={!agentMode} className="accent-amber-500" />
-            自動承認
-          </label>
+          {deepReasoning ? (
+            <label className="flex items-center gap-1.5" title="内省（自己検証）の反復回数。多いほど高品質・高コスト">
+              思考深度
+              <input
+                type="range"
+                min={1}
+                max={MAX_DEPTH}
+                value={depth}
+                onChange={(e) => setDepth(Number(e.target.value))}
+                className="accent-indigo-500"
+              />
+              <span className="w-5 text-center font-mono text-indigo-300">{depth}</span>
+            </label>
+          ) : (
+            <>
+              <label className="flex items-center gap-1.5">
+                <input type="checkbox" checked={agentMode} onChange={(e) => setAgentMode(e.target.checked)} className="accent-blue-600" />
+                エージェント（ツール使用）
+              </label>
+              <label className="flex items-center gap-1.5" title="承認なしで書き込み・コマンドを実行します（注意）">
+                <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} disabled={!agentMode} className="accent-amber-500" />
+                自動承認
+              </label>
+            </>
+          )}
           <label className="flex items-center gap-1.5">
             <input type="checkbox" checked={includeFile} onChange={(e) => setIncludeFile(e.target.checked)} className="accent-blue-600" />
             現在のファイルを文脈に含める

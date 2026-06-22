@@ -12,6 +12,8 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
   const [status, setStatus] = useState<SettingsStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
+  const [thinkingModel, setThinkingModel] = useState("");
+  const [synthesisModel, setSynthesisModel] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -19,6 +21,8 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
     getSettings().then((s) => {
       setStatus(s);
       setModel(s.model);
+      setThinkingModel(s.thinkingModel);
+      setSynthesisModel(s.synthesisModel);
       setApiKey(""); // never prefill the secret
     });
   }, [open]);
@@ -29,7 +33,12 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
     setSaving(true);
     try {
       // Only overwrite the key if the user typed a new one.
-      await saveSettings(apiKey.trim() ? apiKey.trim() : undefined, model.trim());
+      await saveSettings({
+        apiKey: apiKey.trim() ? apiKey.trim() : undefined,
+        model: model.trim(),
+        thinkingModel: thinkingModel.trim(),
+        synthesisModel: synthesisModel.trim(),
+      });
       onSaved();
       onClose();
     } finally {
@@ -67,16 +76,34 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
           className="mb-4 w-full rounded-md border border-neutral-700 bg-[#1e1e1e] px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500"
         />
 
-        <label className="mb-1 block text-sm text-neutral-300">モデル</label>
-        <ModelPicker
-          value={model}
-          onChange={setModel}
-          listId="settings-models"
-          className="mb-1"
-        />
-        <p className="mb-5 text-xs text-neutral-500">
+        <label className="mb-1 block text-sm text-neutral-300">モデル（既定）</label>
+        <ModelPicker value={model} onChange={setModel} listId="settings-models" className="mb-1" />
+        <p className="mb-4 text-xs text-neutral-500">
           一覧は OpenRouter から自動取得されます（⟳ で更新）。任意の ID を直接入力もできます。
         </p>
+
+        <div className="mb-4 rounded-md border border-indigo-800/40 bg-indigo-950/20 p-3">
+          <p className="mb-2 text-xs font-medium text-indigo-300">
+            🧠 ディープ推論のモデルルーティング
+          </p>
+          <label className="mb-1 block text-xs text-neutral-400">
+            思考モデル（軽量・安価。draft / 内省フェーズ用。空欄なら既定モデル）
+          </label>
+          <ModelPicker
+            value={thinkingModel}
+            onChange={setThinkingModel}
+            listId="settings-thinking-models"
+            className="mb-3"
+          />
+          <label className="mb-1 block text-xs text-neutral-400">
+            合成モデル（高性能。最終合成フェーズ用。空欄なら既定モデル）
+          </label>
+          <ModelPicker
+            value={synthesisModel}
+            onChange={setSynthesisModel}
+            listId="settings-synthesis-models"
+          />
+        </div>
 
         <div className="flex justify-end gap-2">
           <button

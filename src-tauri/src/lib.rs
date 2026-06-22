@@ -90,6 +90,7 @@ pub fn run() {
             run_command,
             openrouter::send_chat,
             openrouter::chat_once,
+            openrouter::complete,
             openrouter::list_models,
             openrouter::get_settings,
             openrouter::save_settings,

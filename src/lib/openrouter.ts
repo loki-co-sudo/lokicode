@@ -38,6 +38,8 @@ export interface SettingsStatus {
   hasKey: boolean;
   model: string;
   keySource: "config" | "env" | "none";
+  thinkingModel: string;
+  synthesisModel: string;
 }
 
 export interface ModelInfo {
@@ -69,8 +71,23 @@ export function getSettings(): Promise<SettingsStatus> {
   return invoke<SettingsStatus>("get_settings");
 }
 
-export function saveSettings(apiKey?: string, model?: string): Promise<void> {
-  return invoke("save_settings", { apiKey: apiKey ?? null, model: model ?? null });
+export function saveSettings(opts: {
+  apiKey?: string;
+  model?: string;
+  thinkingModel?: string;
+  synthesisModel?: string;
+}): Promise<void> {
+  return invoke("save_settings", {
+    apiKey: opts.apiKey ?? null,
+    model: opts.model ?? null,
+    thinkingModel: opts.thinkingModel ?? null,
+    synthesisModel: opts.synthesisModel ?? null,
+  });
+}
+
+/** Plain completion with an explicit model (used by the reasoning core). */
+export function complete(messages: ApiMessage[], model?: string): Promise<string> {
+  return invoke<string>("complete", { messages, model: model ?? null });
 }
 
 /**
