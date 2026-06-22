@@ -156,6 +156,49 @@ pub async fn list_models() -> Result<Vec<ModelInfo>, String> {
     Ok(models)
 }
 
+/// One non-streaming completion that supports tool calling. Returns the raw
+/// assistant message (which may contain `content` and/or `tool_calls`). The agent
+/// loop on the frontend drives the multi-step tool use.
+#[tauri::command]
+pub async fn chat_once(
+    app: AppHandle,
+    messages: serde_json::Value,
+    tools: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let Some(key) = resolve_key(&app) else {
+        return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
+    };
+    let model = resolve_model(&app);
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+    });
+    if tools.as_array().is_some_and(|a| !a.is_empty()) {
+        body["tools"] = tools;
+        body["tool_choice"] = serde_json::json!("auto");
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(API_URL)
+        .bearer_auth(key)
+        .header("HTTP-Referer", "http://localhost")
+        .header("X-Title", "lokicode")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("通信エラー: {e}"))?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
+        return Err(format!("OpenRouter エラー (HTTP {status}): {detail}"));
+    }
+    Ok(json["choices"][0]["message"].clone())
+}
+
 #[tauri::command]
 pub async fn send_chat(
     app: AppHandle,

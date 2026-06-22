@@ -1,0 +1,197 @@
+// Agent loop: lets the model use tools (read/write files, list dirs, run shell
+// commands) to actually operate on the machine, not just answer questions.
+
+import { invoke } from "@tauri-apps/api/core";
+import { chatOnce, type ApiMessage } from "./openrouter";
+
+export type ToolStatus = "running" | "done" | "error" | "denied";
+
+/** A persisted transcript item shown in the chat pane. */
+export type AgentItem =
+  | { kind: "user"; content: string }
+  | { kind: "assistant"; content: string }
+  | {
+      kind: "tool";
+      name: string;
+      args: Record<string, unknown>;
+      status: ToolStatus;
+      result?: string;
+    };
+
+export const RISKY_TOOLS = new Set(["write_file", "run_command"]);
+
+const MAX_ITERATIONS = 16;
+const MAX_RESULT_CHARS = 12000;
+
+interface CommandOutput {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+export const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Read the UTF-8 text contents of a file at an absolute path.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string", description: "Absolute file path" } },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_dir",
+      description: "List the entries (files and folders) of a directory.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string", description: "Absolute directory path" } },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description:
+        "Create or overwrite a UTF-8 text file at an absolute path with the given content.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Absolute file path" },
+          content: { type: "string", description: "Full file content to write" },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_command",
+      description:
+        "Run a shell command on the user's machine and return stdout, stderr and exit code. On Windows this runs via cmd.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The command line to execute" },
+          cwd: { type: "string", description: "Optional absolute working directory" },
+        },
+        required: ["command"],
+      },
+    },
+  },
+];
+
+function truncate(text: string): string {
+  if (text.length <= MAX_RESULT_CHARS) return text;
+  return text.slice(0, MAX_RESULT_CHARS) + `\n…(${text.length - MAX_RESULT_CHARS} 文字省略)`;
+}
+
+async function execTool(name: string, args: Record<string, unknown>): Promise<string> {
+  switch (name) {
+    case "read_file":
+      return truncate(await invoke<string>("read_text_file", { path: String(args.path) }));
+    case "list_dir": {
+      const entries = await invoke("list_dir", { path: String(args.path) });
+      return JSON.stringify(entries);
+    }
+    case "write_file":
+      await invoke("write_text_file", {
+        path: String(args.path),
+        contents: String(args.content ?? ""),
+      });
+      return `書き込み完了: ${args.path}`;
+    case "run_command": {
+      const out = await invoke<CommandOutput>("run_command", {
+        command: String(args.command),
+        cwd: args.cwd ? String(args.cwd) : null,
+      });
+      return truncate(
+        `exit code: ${out.code}\n--- stdout ---\n${out.stdout}\n--- stderr ---\n${out.stderr}`,
+      );
+    }
+    default:
+      return `不明なツール: ${name}`;
+  }
+}
+
+export interface AgentCallbacks {
+  onAssistantText: (text: string) => void;
+  onToolStart: (call: { name: string; args: Record<string, unknown> }) => void;
+  onToolEnd: (status: ToolStatus, result: string) => void;
+  /** Ask the user to approve a risky tool call. */
+  approve: (name: string, args: Record<string, unknown>) => Promise<boolean>;
+}
+
+export interface AgentOptions {
+  autoApprove: boolean;
+  signal?: { aborted: boolean };
+}
+
+/**
+ * Run the agent loop starting from `messages` (system + history + latest user).
+ * Drives tool calls until the model returns a final answer with no tool calls.
+ */
+export async function runAgent(
+  messages: ApiMessage[],
+  cb: AgentCallbacks,
+  opts: AgentOptions,
+): Promise<void> {
+  const conv: ApiMessage[] = [...messages];
+
+  for (let i = 0; i < MAX_ITERATIONS; i++) {
+    if (opts.signal?.aborted) return;
+
+    const assistant = await chatOnce(conv, TOOLS);
+    conv.push(assistant);
+
+    if (assistant.content) cb.onAssistantText(assistant.content);
+
+    const calls = assistant.tool_calls ?? [];
+    if (calls.length === 0) return; // final answer reached
+
+    for (const call of calls) {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(call.function.arguments || "{}");
+      } catch {
+        args = {};
+      }
+      const name = call.function.name;
+      cb.onToolStart({ name, args });
+
+      let status: ToolStatus = "done";
+      let result = "";
+
+      if (RISKY_TOOLS.has(name) && !opts.autoApprove) {
+        const ok = await cb.approve(name, args);
+        if (!ok) {
+          status = "denied";
+          result = "ユーザーが操作を拒否しました。別の方法を検討してください。";
+        }
+      }
+
+      if (status !== "denied") {
+        try {
+          result = await execTool(name, args);
+        } catch (err) {
+          status = "error";
+          result = "エラー: " + (err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      cb.onToolEnd(status, result);
+      conv.push({ role: "tool", tool_call_id: call.id, content: result });
+    }
+  }
+
+  cb.onAssistantText(
+    `（ツール実行が上限の ${MAX_ITERATIONS} 回に達したため停止しました。続けるには指示を追加してください。）`,
+  );
+}

@@ -214,6 +214,7 @@ export default function App() {
             settingsVersion={settingsVersion}
             currentCode={activeTab.content}
             currentFileName={activeTab.name}
+            currentFilePath={activeTab.path}
           />
         </div>
       </div>

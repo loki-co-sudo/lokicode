@@ -15,6 +15,25 @@ export type StreamEvent =
   | { type: "done" }
   | { type: "error"; message: string };
 
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/** OpenAI/OpenRouter-compatible message used by the agent loop. */
+export interface ApiMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+}
+
+/** One non-streaming completion with tool-calling support. */
+export function chatOnce(messages: ApiMessage[], tools: unknown[]): Promise<ApiMessage> {
+  return invoke<ApiMessage>("chat_once", { messages, tools });
+}
+
 export interface SettingsStatus {
   hasKey: boolean;
   model: string;
