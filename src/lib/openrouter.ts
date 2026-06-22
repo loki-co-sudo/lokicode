@@ -1,9 +1,7 @@
-// OpenRouter chat-completions client.
-//
-// The API key is read from a Vite env var (VITE_OPENROUTER_API_KEY). For an MVP
-// this keeps things simple and works without the Rust backend, but note that the
-// key ends up in the frontend bundle — for a real distribution move this call
-// behind a Tauri command so the key stays in the Rust process.
+// Frontend client that talks to the Rust backend. The API key lives in the Rust
+// process (env/.env or the saved settings file) and is never shipped to the webview.
+
+import { invoke, Channel } from "@tauri-apps/api/core";
 
 export type ChatRole = "system" | "user" | "assistant";
 
@@ -12,84 +10,36 @@ export interface ChatMessage {
   content: string;
 }
 
-const API_URL = "https://openrouter.ai/api/v1/chat/completions";
+export type StreamEvent =
+  | { type: "delta"; content: string }
+  | { type: "done" }
+  | { type: "error"; message: string };
 
-const DEFAULT_MODEL =
-  (import.meta.env.VITE_OPENROUTER_MODEL as string | undefined) ??
-  "anthropic/claude-3.5-sonnet";
-
-export function getApiKey(): string | undefined {
-  return import.meta.env.VITE_OPENROUTER_API_KEY as string | undefined;
+export interface SettingsStatus {
+  hasKey: boolean;
+  model: string;
+  keySource: "config" | "env" | "none";
 }
 
-export function hasApiKey(): boolean {
-  return Boolean(getApiKey());
+export function getSettings(): Promise<SettingsStatus> {
+  return invoke<SettingsStatus>("get_settings");
 }
 
-export function getModel(): string {
-  return DEFAULT_MODEL;
-}
-
-interface ChatCompletionResponse {
-  choices?: Array<{ message?: { role: string; content: string } }>;
-  error?: { message?: string };
+export function saveSettings(apiKey?: string, model?: string): Promise<void> {
+  return invoke("save_settings", { apiKey: apiKey ?? null, model: model ?? null });
 }
 
 /**
- * Send a list of messages to OpenRouter and return the assistant's reply text.
- * Throws an Error with a human-readable message on failure.
+ * Stream a chat completion. `onDelta` is called with each token chunk as it
+ * arrives. Resolves when the stream finishes; rejects with the backend error.
  */
-export async function sendChat(
+export async function streamChat(
   messages: ChatMessage[],
-  options: { signal?: AbortSignal; model?: string } = {},
-): Promise<string> {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    throw new Error(
-      "OpenRouter API key is not set. Copy .env.example to .env and set VITE_OPENROUTER_API_KEY.",
-    );
-  }
-
-  let res: Response;
-  try {
-    res = await fetch(API_URL, {
-      method: "POST",
-      signal: options.signal,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        // Optional but recommended by OpenRouter for attribution.
-        "HTTP-Referer": "http://localhost",
-        "X-Title": "lokicode",
-      },
-      body: JSON.stringify({
-        model: options.model ?? DEFAULT_MODEL,
-        messages,
-      }),
-    });
-  } catch (err) {
-    throw new Error(
-      `Network error contacting OpenRouter: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-
-  let data: ChatCompletionResponse;
-  try {
-    data = (await res.json()) as ChatCompletionResponse;
-  } catch {
-    throw new Error(`OpenRouter returned a non-JSON response (HTTP ${res.status}).`);
-  }
-
-  if (!res.ok) {
-    const detail = data.error?.message ?? res.statusText;
-    throw new Error(`OpenRouter error (HTTP ${res.status}): ${detail}`);
-  }
-
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("OpenRouter returned an empty response.");
-  }
-  return content;
+  onDelta: (chunk: string) => void,
+): Promise<void> {
+  const channel = new Channel<StreamEvent>();
+  channel.onmessage = (event) => {
+    if (event.type === "delta") onDelta(event.content);
+  };
+  await invoke("send_chat", { messages, onEvent: channel });
 }
