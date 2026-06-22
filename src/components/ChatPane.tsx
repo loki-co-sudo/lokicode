@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import {
   streamChat,
   getSettings,
@@ -22,12 +28,15 @@ interface ChatPaneProps {
   currentFileName: string;
 }
 
-export default function ChatPane({
-  onOpenSettings,
-  settingsVersion,
-  currentCode,
-  currentFileName,
-}: ChatPaneProps) {
+export interface ChatPaneHandle {
+  /** Insert text into the chat input (used by "選択をAIへ") and focus it. */
+  prefill: (text: string) => void;
+}
+
+const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
+  { onOpenSettings, settingsVersion, currentCode, currentFileName },
+  ref,
+) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadMessages());
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -36,6 +45,14 @@ export default function ChatPane({
   const [model, setModel] = useState("");
   const [includeFile, setIncludeFile] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    prefill(text: string) {
+      setInput((prev) => (prev.trim() ? `${prev}\n${text}` : text));
+      inputRef.current?.focus();
+    },
+  }));
 
   useEffect(() => {
     getSettings()
@@ -208,6 +225,7 @@ export default function ChatPane({
         </label>
         <div className="flex items-end gap-2">
           <textarea
+            ref={inputRef}
             className="min-h-[44px] max-h-40 flex-1 resize-none rounded-md border border-neutral-700 bg-[#2a2a2b] px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 outline-none focus:border-blue-500"
             placeholder="メッセージを入力…（Enter で送信 / Shift+Enter で改行）"
             value={input}
@@ -227,4 +245,6 @@ export default function ChatPane({
       </div>
     </div>
   );
-}
+});
+
+export default ChatPane;

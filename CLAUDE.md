@@ -13,6 +13,10 @@ npm run dev           # フロントエンドのみ（ブラウザ）
 API キーは `.env`（`.gitignore` 済み）の `VITE_OPENROUTER_API_KEY` から読み込む。
 `.env.example` には実キーを入れないこと（プレースホルダのみ）。
 
+## 開発ルール
+
+- **機能や挙動を変更したら、毎回 `README.md` も同じ変更で更新する**（コミット前に。日本語で）。README を「完了の定義」に含めること。
+
 ## コミット規約
 
 - コミットメッセージは **English のプレフィックス**（`feat:` / `fix:` / `chore:` / `docs:` / `refactor:` など）+ **日本語の説明**で書く。

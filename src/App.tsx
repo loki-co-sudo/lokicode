@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import EditorPane from "./components/EditorPane";
-import ChatPane from "./components/ChatPane";
+import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
 import SettingsModal from "./components/SettingsModal";
 import {
   openFile,
@@ -9,6 +10,15 @@ import {
   fileNameFromPath,
   languageFromPath,
 } from "./lib/files";
+
+export interface Tab {
+  id: string;
+  name: string;
+  path: string | null;
+  language: string;
+  content: string;
+  dirty: boolean;
+}
 
 const SAMPLE_CODE = `// index.js — sample file
 function greet(name) {
@@ -19,12 +29,25 @@ const target = "world";
 console.log(greet(target));
 `;
 
+let untitledCounter = 1;
+
+function createTab(partial: Partial<Tab> = {}): Tab {
+  return {
+    id: crypto.randomUUID(),
+    name: "untitled",
+    path: null,
+    language: "plaintext",
+    content: "",
+    dirty: false,
+    ...partial,
+  };
+}
+
 export default function App() {
-  const [code, setCode] = useState(SAMPLE_CODE);
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [fileName, setFileName] = useState("index.js");
-  const [language, setLanguage] = useState("javascript");
-  const [dirty, setDirty] = useState(false);
+  const [tabs, setTabs] = useState<Tab[]>(() => [
+    createTab({ name: "index.js", language: "javascript", content: SAMPLE_CODE }),
+  ]);
+  const [activeId, setActiveId] = useState(() => tabs[0].id);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsVersion, setSettingsVersion] = useState(0);
@@ -32,37 +55,95 @@ export default function App() {
   const [editorPct, setEditorPct] = useState(62);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const chatRef = useRef<ChatPaneHandle>(null);
 
-  const handleChange = useCallback((value: string) => {
-    setCode(value);
-    setDirty(true);
+  const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
+
+  const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
+    setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }, []);
+
+  const handleChange = useCallback(
+    (value: string) => {
+      updateTab(activeId, { content: value, dirty: true });
+    },
+    [activeId, updateTab],
+  );
+
+  const handleNewTab = useCallback(() => {
+    const tab = createTab({ name: `untitled-${untitledCounter++}` });
+    setTabs((prev) => [...prev, tab]);
+    setActiveId(tab.id);
   }, []);
 
   const handleOpen = useCallback(async () => {
     const file = await openFile();
     if (!file) return;
-    setCode(file.content);
-    setFilePath(file.path);
-    setFileName(fileNameFromPath(file.path));
-    setLanguage(languageFromPath(file.path));
-    setDirty(false);
-  }, []);
+    // If already open, just activate it.
+    const existing = tabs.find((t) => t.path === file.path);
+    if (existing) {
+      setActiveId(existing.id);
+      return;
+    }
+    const tab = createTab({
+      name: fileNameFromPath(file.path),
+      path: file.path,
+      language: languageFromPath(file.path),
+      content: file.content,
+    });
+    setTabs((prev) => [...prev, tab]);
+    setActiveId(tab.id);
+  }, [tabs]);
 
   const handleSave = useCallback(async () => {
-    if (filePath) {
-      await writeFile(filePath, code);
-      setDirty(false);
+    const tab = tabs.find((t) => t.id === activeId);
+    if (!tab) return;
+    if (tab.path) {
+      await writeFile(tab.path, tab.content);
+      updateTab(tab.id, { dirty: false });
     } else {
-      const path = await saveFileAs(code, fileName);
+      const path = await saveFileAs(tab.content, tab.name);
       if (!path) return;
-      setFilePath(path);
-      setFileName(fileNameFromPath(path));
-      setLanguage(languageFromPath(path));
-      setDirty(false);
+      updateTab(tab.id, {
+        path,
+        name: fileNameFromPath(path),
+        language: languageFromPath(path),
+        dirty: false,
+      });
     }
-  }, [filePath, code, fileName]);
+  }, [tabs, activeId, updateTab]);
 
-  // Ctrl/Cmd+S to save.
+  const handleCloseTab = useCallback(
+    async (id: string) => {
+      const tab = tabs.find((t) => t.id === id);
+      if (!tab) return;
+      if (tab.dirty) {
+        const ok = await confirm(`「${tab.name}」には未保存の変更があります。閉じますか？`, {
+          title: "未保存の変更",
+          kind: "warning",
+        });
+        if (!ok) return;
+      }
+      setTabs((prev) => {
+        const remaining = prev.filter((t) => t.id !== id);
+        const next = remaining.length > 0 ? remaining : [createTab({ name: "untitled" })];
+        if (id === activeId) {
+          const idx = prev.findIndex((t) => t.id === id);
+          const neighbor = next[Math.min(idx, next.length - 1)];
+          setActiveId(neighbor.id);
+        }
+        return next;
+      });
+    },
+    [tabs, activeId],
+  );
+
+  const handleSendSelection = useCallback((code: string, language: string) => {
+    const fence = language && language !== "plaintext" ? language : "";
+    chatRef.current?.prefill(`以下のコードについて教えてください:\n\n\`\`\`${fence}\n${code}\n\`\`\``);
+  }, []);
+
+  // Ctrl/Cmd+S to save the active tab.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -109,13 +190,15 @@ export default function App() {
       >
         <div style={{ width: `${editorPct}%` }} className="min-w-0">
           <EditorPane
-            fileName={fileName}
-            language={language}
-            value={code}
-            dirty={dirty}
+            tabs={tabs}
+            activeTab={activeTab}
+            onSelectTab={setActiveId}
+            onCloseTab={handleCloseTab}
+            onNewTab={handleNewTab}
             onChange={handleChange}
             onOpen={handleOpen}
             onSave={handleSave}
+            onSendSelection={handleSendSelection}
           />
         </div>
 
@@ -126,10 +209,11 @@ export default function App() {
 
         <div style={{ width: `${100 - editorPct}%` }} className="min-w-0">
           <ChatPane
+            ref={chatRef}
             onOpenSettings={() => setSettingsOpen(true)}
             settingsVersion={settingsVersion}
-            currentCode={code}
-            currentFileName={fileName}
+            currentCode={activeTab.content}
+            currentFileName={activeTab.name}
           />
         </div>
       </div>
