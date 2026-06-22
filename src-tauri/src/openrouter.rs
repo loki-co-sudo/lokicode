@@ -116,6 +116,46 @@ pub fn save_settings(
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+}
+
+/// Fetch the list of models currently available on OpenRouter so the picker is
+/// always up to date (no hardcoded list to maintain). This endpoint is public.
+#[tauri::command]
+pub async fn list_models() -> Result<Vec<ModelInfo>, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://openrouter.ai/api/v1/models")
+        .header("HTTP-Referer", "http://localhost")
+        .header("X-Title", "lokicode")
+        .send()
+        .await
+        .map_err(|e| format!("通信エラー: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("モデル一覧の取得に失敗 (HTTP {})", resp.status()));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let mut models: Vec<ModelInfo> = json["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let id = m["id"].as_str()?.to_string();
+                    let name = m["name"].as_str().unwrap_or(&id).to_string();
+                    Some(ModelInfo { id, name })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(models)
+}
+
 #[tauri::command]
 pub async fn send_chat(
     app: AppHandle,

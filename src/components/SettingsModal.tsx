@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSettings, saveSettings, type SettingsStatus } from "../lib/openrouter";
+import ModelPicker from "./ModelPicker";
 
 interface SettingsModalProps {
   open: boolean;
@@ -67,13 +68,15 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
         />
 
         <label className="mb-1 block text-sm text-neutral-300">モデル</label>
-        <input
-          type="text"
+        <ModelPicker
           value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="anthropic/claude-3.5-sonnet"
-          className="mb-5 w-full rounded-md border border-neutral-700 bg-[#1e1e1e] px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500"
+          onChange={setModel}
+          listId="settings-models"
+          className="mb-1"
         />
+        <p className="mb-5 text-xs text-neutral-500">
+          一覧は OpenRouter から自動取得されます（⟳ で更新）。任意の ID を直接入力もできます。
+        </p>
 
         <div className="flex justify-end gap-2">
           <button

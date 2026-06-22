@@ -24,6 +24,7 @@ pub fn run() {
             read_text_file,
             write_text_file,
             openrouter::send_chat,
+            openrouter::list_models,
             openrouter::get_settings,
             openrouter::save_settings,
         ])

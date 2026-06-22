@@ -128,6 +128,8 @@ export default function App() {
           <ChatPane
             onOpenSettings={() => setSettingsOpen(true)}
             settingsVersion={settingsVersion}
+            currentCode={code}
+            currentFileName={fileName}
           />
         </div>
       </div>

@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { streamChat, getSettings, type ChatMessage } from "../lib/openrouter";
+import {
+  streamChat,
+  getSettings,
+  saveSettings,
+  type ChatMessage,
+} from "../lib/openrouter";
+import { loadMessages, saveMessages, clearMessages } from "../lib/chatStorage";
+import Markdown from "./Markdown";
+import ModelPicker from "./ModelPicker";
 
 const SYSTEM_PROMPT: ChatMessage = {
   role: "system",
@@ -9,17 +17,24 @@ const SYSTEM_PROMPT: ChatMessage = {
 
 interface ChatPaneProps {
   onOpenSettings: () => void;
-  /** bumped by the parent after settings are saved, to refresh status */
   settingsVersion: number;
+  currentCode: string;
+  currentFileName: string;
 }
 
-export default function ChatPane({ onOpenSettings, settingsVersion }: ChatPaneProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export default function ChatPane({
+  onOpenSettings,
+  settingsVersion,
+  currentCode,
+  currentFileName,
+}: ChatPaneProps) {
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadMessages());
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(true);
   const [model, setModel] = useState("");
+  const [includeFile, setIncludeFile] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -32,8 +47,27 @@ export default function ChatPane({ onOpenSettings, settingsVersion }: ChatPanePr
   }, [settingsVersion]);
 
   useEffect(() => {
+    saveMessages(messages);
+  }, [messages]);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, streaming]);
+
+  async function handleModelChange(id: string) {
+    setModel(id);
+    try {
+      await saveSettings(undefined, id);
+    } catch {
+      // ignore persistence errors
+    }
+  }
+
+  function handleClear() {
+    setMessages([]);
+    clearMessages();
+    setError(null);
+  }
 
   async function handleSend() {
     const text = input.trim();
@@ -41,14 +75,23 @@ export default function ChatPane({ onOpenSettings, settingsVersion }: ChatPanePr
 
     const userMessage: ChatMessage = { role: "user", content: text };
     const history = [...messages, userMessage];
-    // Append the user message plus an empty assistant message we stream into.
     setMessages([...history, { role: "assistant", content: "" }]);
     setInput("");
     setError(null);
     setStreaming(true);
 
+    // Optionally prepend the current editor file as context (not shown in history).
+    const payload: ChatMessage[] = [SYSTEM_PROMPT];
+    if (includeFile && currentCode.trim()) {
+      payload.push({
+        role: "system",
+        content: `The user is editing \`${currentFileName}\`. Current contents:\n\n\`\`\`\n${currentCode}\n\`\`\``,
+      });
+    }
+    payload.push(...history);
+
     try {
-      await streamChat([SYSTEM_PROMPT, ...history], (chunk) => {
+      await streamChat(payload, (chunk) => {
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
@@ -59,9 +102,7 @@ export default function ChatPane({ onOpenSettings, settingsVersion }: ChatPanePr
         });
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      // Drop the empty/partial assistant bubble on hard failure if nothing streamed.
+      setError(err instanceof Error ? err.message : String(err));
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.content === "") return prev.slice(0, -1);
@@ -81,21 +122,33 @@ export default function ChatPane({ onOpenSettings, settingsVersion }: ChatPanePr
 
   return (
     <div className="flex h-full flex-col bg-[#1b1b1c]">
-      <div className="flex items-center justify-between border-b border-neutral-800 bg-[#252526] px-4 py-2">
+      <div className="flex items-center gap-2 border-b border-neutral-800 bg-[#252526] px-3 py-2">
         <span className="text-sm font-medium text-neutral-200">AI Chat</span>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-neutral-500">{model}</span>
-          <button
-            onClick={onOpenSettings}
-            title="設定"
-            className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-        </div>
+        <ModelPicker
+          value={model}
+          onChange={handleModelChange}
+          listId="header-models"
+          className="min-w-0 flex-1"
+        />
+        <button
+          onClick={handleClear}
+          title="会話をクリア"
+          className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+          </svg>
+        </button>
+        <button
+          onClick={onOpenSettings}
+          title="設定"
+          className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </div>
 
       {!hasKey && (
@@ -118,11 +171,21 @@ export default function ChatPane({ onOpenSettings, settingsVersion }: ChatPanePr
           <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
             <div
               className={
-                "max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm " +
-                (m.role === "user" ? "bg-blue-600 text-white" : "bg-neutral-800 text-neutral-100")
+                "max-w-[85%] rounded-lg px-3 py-2 " +
+                (m.role === "user"
+                  ? "whitespace-pre-wrap bg-blue-600 text-sm text-white"
+                  : "bg-neutral-800 text-neutral-100")
               }
             >
-              {m.content || (streaming && i === messages.length - 1 ? "…" : "")}
+              {m.role === "assistant" ? (
+                m.content ? (
+                  <Markdown content={m.content} />
+                ) : (
+                  <span className="text-sm text-neutral-400">…</span>
+                )
+              ) : (
+                m.content
+              )}
             </div>
           </div>
         ))}
@@ -134,6 +197,15 @@ export default function ChatPane({ onOpenSettings, settingsVersion }: ChatPanePr
       </div>
 
       <div className="border-t border-neutral-800 p-3">
+        <label className="mb-2 flex items-center gap-2 text-xs text-neutral-400">
+          <input
+            type="checkbox"
+            checked={includeFile}
+            onChange={(e) => setIncludeFile(e.target.checked)}
+            className="accent-blue-600"
+          />
+          現在のファイル（{currentFileName}）を文脈に含める
+        </label>
         <div className="flex items-end gap-2">
           <textarea
             className="min-h-[44px] max-h-40 flex-1 resize-none rounded-md border border-neutral-700 bg-[#2a2a2b] px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 outline-none focus:border-blue-500"

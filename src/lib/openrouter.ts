@@ -21,6 +21,31 @@ export interface SettingsStatus {
   keySource: "config" | "env" | "none";
 }
 
+export interface ModelInfo {
+  id: string;
+  name: string;
+}
+
+let modelsCache: ModelInfo[] | null = null;
+let modelsInflight: Promise<ModelInfo[]> | null = null;
+
+/** Fetch available models from OpenRouter (cached + deduped for the session). */
+export async function listModels(force = false): Promise<ModelInfo[]> {
+  if (modelsCache && !force) return modelsCache;
+  if (modelsInflight && !force) return modelsInflight;
+  modelsInflight = invoke<ModelInfo[]>("list_models")
+    .then((models) => {
+      modelsCache = models;
+      modelsInflight = null;
+      return models;
+    })
+    .catch((err) => {
+      modelsInflight = null;
+      throw err;
+    });
+  return modelsInflight;
+}
+
 export function getSettings(): Promise<SettingsStatus> {
   return invoke<SettingsStatus>("get_settings");
 }
