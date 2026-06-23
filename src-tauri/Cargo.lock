@@ -3793,6 +3793,7 @@ dependencies = [
  "base64 0.22.1",
  "dotenvy",
  "futures-util",
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3802,6 +3803,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "walkdir",
 ]
 
 [[package]]

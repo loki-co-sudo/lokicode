@@ -303,6 +303,167 @@ pub struct ChatOnceResult {
     usage: Usage,
 }
 
+/// Streamed agent turn: text deltas arrive live; the assembled assistant message
+/// (content + tool_calls) and usage are delivered in the final `Done` event.
+#[derive(Serialize, Clone)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum AgentStreamEvent {
+    Delta { content: String },
+    Done { message: serde_json::Value, usage: Usage },
+    Error { message: String },
+}
+
+/// Like `chat_once` but streams assistant text as it is generated. Tool calls are
+/// accumulated from the stream and returned whole in the `Done` event.
+#[tauri::command]
+pub async fn chat_once_stream(
+    app: AppHandle,
+    messages: serde_json::Value,
+    tools: serde_json::Value,
+    model: Option<String>,
+    on_event: Channel<AgentStreamEvent>,
+) -> Result<(), String> {
+    let Some(key) = resolve_key(&app) else {
+        let msg = "APIキーが未設定です。右上の設定からキーを入力してください。".to_string();
+        let _ = on_event.send(AgentStreamEvent::Error { message: msg.clone() });
+        return Err(msg);
+    };
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| resolve_model(&app));
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "usage": { "include": true },
+        "stream_options": { "include_usage": true },
+    });
+    if tools.as_array().is_some_and(|a| !a.is_empty()) {
+        body["tools"] = tools;
+        body["tool_choice"] = serde_json::json!("auto");
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(API_URL)
+        .bearer_auth(key)
+        .header("HTTP-Referer", "http://localhost")
+        .header("X-Title", "lokicode")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("通信エラー: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let msg = format!("OpenRouter エラー (HTTP {status}): {text}");
+        let _ = on_event.send(AgentStreamEvent::Error { message: msg.clone() });
+        return Err(msg);
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
+    let mut content = String::new();
+    // Accumulate tool calls by their stream index.
+    let mut tool_calls: Vec<ToolCallAcc> = Vec::new();
+    let mut usage = Usage::default();
+
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| e.to_string())?;
+        buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+        while let Some(newline) = buffer.find('\n') {
+            let line: String = buffer.drain(..=newline).collect();
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                let message = assemble_message(&content, &tool_calls);
+                let _ = on_event.send(AgentStreamEvent::Done { message, usage });
+                return Ok(());
+            }
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else {
+                continue;
+            };
+            if json.get("usage").is_some() {
+                usage = extract_usage(&json);
+            }
+            let delta = &json["choices"][0]["delta"];
+            if let Some(text) = delta["content"].as_str() {
+                if !text.is_empty() {
+                    content.push_str(text);
+                    let _ = on_event.send(AgentStreamEvent::Delta {
+                        content: text.to_string(),
+                    });
+                }
+            }
+            if let Some(calls) = delta["tool_calls"].as_array() {
+                for tc in calls {
+                    let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                    while tool_calls.len() <= idx {
+                        tool_calls.push(ToolCallAcc::default());
+                    }
+                    let slot = &mut tool_calls[idx];
+                    if let Some(id) = tc["id"].as_str() {
+                        slot.id = id.to_string();
+                    }
+                    if let Some(name) = tc["function"]["name"].as_str() {
+                        slot.name.push_str(name);
+                    }
+                    if let Some(args) = tc["function"]["arguments"].as_str() {
+                        slot.arguments.push_str(args);
+                    }
+                }
+            }
+        }
+    }
+
+    // Stream ended without an explicit [DONE].
+    let message = assemble_message(&content, &tool_calls);
+    let _ = on_event.send(AgentStreamEvent::Done { message, usage });
+    Ok(())
+}
+
+#[derive(Default)]
+struct ToolCallAcc {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+fn assemble_message(content: &str, tool_calls: &[ToolCallAcc]) -> serde_json::Value {
+    let mut msg = serde_json::json!({ "role": "assistant" });
+    msg["content"] = if content.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(content.to_string())
+    };
+    if !tool_calls.is_empty() {
+        let calls: Vec<serde_json::Value> = tool_calls
+            .iter()
+            .filter(|c| !c.name.is_empty())
+            .map(|c| {
+                serde_json::json!({
+                    "id": c.id,
+                    "type": "function",
+                    "function": { "name": c.name, "arguments": c.arguments },
+                })
+            })
+            .collect();
+        if !calls.is_empty() {
+            msg["tool_calls"] = serde_json::Value::Array(calls);
+        }
+    }
+    msg
+}
+
 #[tauri::command]
 pub async fn send_chat(
     app: AppHandle,

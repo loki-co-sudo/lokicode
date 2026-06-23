@@ -50,6 +50,34 @@ export function chatOnce(
   return invoke<ChatOnceResult>("chat_once", { messages, tools, model: model ?? null });
 }
 
+type AgentStreamEvent =
+  | { type: "delta"; content: string }
+  | { type: "done"; message: ApiMessage; usage: Usage }
+  | { type: "error"; message: string };
+
+/**
+ * Streaming variant of {@link chatOnce}: `onDelta` fires with text as it streams;
+ * resolves with the assembled assistant message (incl. tool calls) and usage.
+ */
+export function chatOnceStream(
+  messages: ApiMessage[],
+  tools: unknown[],
+  model: string | undefined,
+  onDelta: (chunk: string) => void,
+): Promise<ChatOnceResult> {
+  return new Promise<ChatOnceResult>((resolve, reject) => {
+    const channel = new Channel<AgentStreamEvent>();
+    channel.onmessage = (event) => {
+      if (event.type === "delta") onDelta(event.content);
+      else if (event.type === "done") resolve({ message: event.message, usage: event.usage });
+      else if (event.type === "error") reject(new Error(event.message));
+    };
+    invoke("chat_once_stream", { messages, tools, model: model ?? null, onEvent: channel }).catch(
+      reject,
+    );
+  });
+}
+
 export interface SettingsStatus {
   hasKey: boolean;
   model: string;

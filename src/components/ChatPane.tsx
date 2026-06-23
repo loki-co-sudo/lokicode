@@ -17,6 +17,7 @@ import {
   runAgent,
   type AgentItem,
   type ToolStatus,
+  type Todo,
 } from "../lib/agent";
 import { runRecurrentReasoning, MAX_DEPTH } from "../lib/reasoning";
 import { loadItems, saveItems, clearItems } from "../lib/chatStorage";
@@ -55,6 +56,8 @@ function buildSystemPrompt(
 You can use the provided tools to read/list/write files and run shell commands to actually accomplish the user's request — not just describe it.
 Guidelines:
 - Use absolute Windows paths.
+- Use grep_search to locate code across the workspace instead of guessing file paths.
+- For multi-step tasks, call update_plan first to lay out the steps, then update it as you progress (keep one step in_progress).
 - Read files before editing them; after changes you may verify by reading files or running commands.
 - write_file and run_command require the user's approval; if a call is denied, propose an alternative.
 - Be concise. Reply in the user's language (Japanese if they write Japanese) and use Markdown.
@@ -79,6 +82,7 @@ function toolLabel(name: string): string {
       list_dir: "ディレクトリ一覧",
       write_file: "ファイル書き込み",
       run_command: "コマンド実行",
+      grep_search: "コード検索",
     }[name] ?? name
   );
 }
@@ -91,7 +95,14 @@ function StatusBadge({ status }: { status: ToolStatus }) {
     denied: ["拒否", "text-neutral-400"],
   };
   const [label, cls] = map[status];
-  return <span className={"text-[11px] " + cls}>{label}</span>;
+  return (
+    <span className={"flex items-center gap-1 text-[11px] " + cls}>
+      {status === "running" && (
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-300" />
+      )}
+      {label}
+    </span>
+  );
 }
 
 function ToolCard({
@@ -103,7 +114,9 @@ function ToolCard({
   const summary =
     item.name === "run_command"
       ? String(item.args.command ?? "")
-      : String(item.args.path ?? "");
+      : item.name === "grep_search"
+        ? String(item.args.pattern ?? "")
+        : String(item.args.path ?? "");
   return (
     <div className="rounded-md border border-neutral-700 bg-neutral-800/60">
       <button
@@ -142,6 +155,37 @@ function ThoughtCard({ item }: { item: Extract<AgentItem, { kind: "thought" }> }
           <Markdown content={item.content} />
         </div>
       )}
+    </div>
+  );
+}
+
+function PlanCard({ item }: { item: Extract<AgentItem, { kind: "plan" }> }) {
+  const icon: Record<Todo["status"], string> = {
+    completed: "✅",
+    in_progress: "⏳",
+    pending: "⬜",
+  };
+  return (
+    <div className="rounded-md border border-neutral-700 bg-neutral-800/40 px-3 py-2">
+      <div className="mb-1 text-xs font-medium text-neutral-300">📋 計画</div>
+      <ul className="space-y-0.5 text-xs">
+        {item.todos.map((t, i) => (
+          <li key={i} className="flex items-start gap-2">
+            <span>{icon[t.status]}</span>
+            <span
+              className={
+                t.status === "completed"
+                  ? "text-neutral-500 line-through"
+                  : t.status === "in_progress"
+                    ? "text-neutral-100"
+                    : "text-neutral-400"
+              }
+            >
+              {t.content}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -211,8 +255,44 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     el.style.height = Math.min(el.scrollHeight, 160) + "px";
   }, [input]);
 
+  const streamingRef = useRef(false);
+
   function appendItem(item: AgentItem) {
     setItems((prev) => [...prev, item]);
+  }
+
+  // Stream assistant text into a growing bubble (creates one on the first chunk).
+  function handleAssistantDelta(chunk: string) {
+    setItems((prev) => {
+      if (!streamingRef.current) {
+        streamingRef.current = true;
+        return [...prev, { kind: "assistant", content: chunk }];
+      }
+      const next = [...prev];
+      for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].kind === "assistant") {
+          const a = next[i] as Extract<AgentItem, { kind: "assistant" }>;
+          next[i] = { ...a, content: a.content + chunk };
+          break;
+        }
+      }
+      return next;
+    });
+  }
+
+  function handleAssistantDone() {
+    streamingRef.current = false;
+  }
+
+  // Replace the existing plan card (one evolving checklist) or append a new one.
+  function handlePlan(todos: Todo[]) {
+    setItems((prev) => {
+      const idx = prev.map((it) => it.kind).lastIndexOf("plan");
+      if (idx === -1) return [...prev, { kind: "plan", todos }];
+      const next = [...prev];
+      next[idx] = { kind: "plan", todos };
+      return next;
+    });
   }
 
   function updateLastTool(status: ToolStatus, result: string) {
@@ -257,6 +337,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setInput("");
     setError(null);
     setBusy(true);
+    streamingRef.current = false;
     abortRef.current = { aborted: false };
     const signal = abortRef.current;
 
@@ -300,6 +381,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           base,
           {
             onAssistantText: (t) => appendItem({ kind: "assistant", content: t }),
+            onAssistantDelta: handleAssistantDelta,
+            onAssistantDone: handleAssistantDone,
+            onPlan: handlePlan,
             onToolStart: ({ name, args }) =>
               appendItem({ kind: "tool", name, args, status: "running" }),
             onToolEnd: (status, result) => updateLastTool(status, result),
@@ -307,7 +391,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
             onUsage: addUsage,
           },
-          { autoApprove, signal },
+          { autoApprove, signal, workspaceRoot: workspaceRoot ?? undefined },
         );
       } else {
         // Plain streaming chat (no tools).
@@ -396,6 +480,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         {items.map((it, i) => {
           if (it.kind === "tool") return <ToolCard key={i} item={it} />;
           if (it.kind === "thought") return <ThoughtCard key={i} item={it} />;
+          if (it.kind === "plan") return <PlanCard key={i} item={it} />;
           const isUser = it.kind === "user";
           return (
             <div key={i} className={isUser ? "flex justify-end" : "flex justify-start"}>

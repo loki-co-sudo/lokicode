@@ -1,6 +1,7 @@
 mod git;
 mod github;
 mod openrouter;
+mod search;
 
 use serde::Serialize;
 
@@ -140,7 +141,9 @@ pub fn run() {
             run_command,
             openrouter::send_chat,
             openrouter::chat_once,
+            openrouter::chat_once_stream,
             openrouter::complete,
+            search::grep_search,
             openrouter::list_models,
             openrouter::get_settings,
             openrouter::save_settings,
