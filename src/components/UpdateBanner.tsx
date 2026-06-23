@@ -18,14 +18,25 @@ export default function UpdateBanner({ manualNonce }: { manualNonce: number }) {
   const runCheck = useCallback(async (manual: boolean) => {
     setPhase("checking");
     setError(null);
-    const u = await checkForUpdate();
-    if (u) {
-      setUpdate(u);
-      setDismissed(false);
-      setPhase("available");
-    } else {
-      // On a silent startup check, stay invisible when already current.
-      setPhase(manual ? "uptodate" : "idle");
+    try {
+      const u = await checkForUpdate();
+      if (u) {
+        setUpdate(u);
+        setDismissed(false);
+        setPhase("available");
+      } else {
+        // On a silent startup check, stay invisible when already current.
+        setPhase(manual ? "uptodate" : "idle");
+      }
+    } catch (e) {
+      // A failed check must not look like "up to date". Surface it on manual
+      // checks (e.g. private repo / offline); stay quiet on the silent startup one.
+      if (manual) {
+        setError("更新の確認に失敗しました: " + (e instanceof Error ? e.message : String(e)));
+        setPhase("error");
+      } else {
+        setPhase("idle");
+      }
     }
   }, []);
 

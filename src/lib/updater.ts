@@ -5,15 +5,12 @@ export type { Update };
 
 /**
  * Check GitHub Releases for a newer version. Returns the pending Update, or
- * null if up to date. Swallows errors (e.g. running in `npm run dev` where the
- * updater isn't wired) and returns null so the UI can stay quiet.
+ * null if already up to date. Throws on failure (e.g. network error, or the
+ * release endpoint being unreachable because the repo is private) so callers can
+ * distinguish "up to date" from "could not check" instead of masking errors.
  */
 export async function checkForUpdate(): Promise<Update | null> {
-  try {
-    return await check();
-  } catch {
-    return null;
-  }
+  return await check();
 }
 
 /** Download and install the update, reporting download progress in bytes. */
