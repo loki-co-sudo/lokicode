@@ -1,0 +1,52 @@
+name: release
+
+# v* タグ（例: v0.3.0）を push するとビルド・署名して GitHub Release を公開する。
+# 成果物にはインストーラ・.sig・latest.json が含まれ、インストール版が自己更新できる。
+on:
+  push:
+    tags:
+      - "v*"
+
+# Release を作成・更新するために書き込み権限が必要。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build, sign and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 更新成果物（.sig / latest.json）への署名鍵。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # タグ名（v0.3.0 など）をそのまま Release タグに使う。
+          tagName: ${{ github.ref_name }}
+          releaseName: "lokicode ${{ github.ref_name }}"
+          releaseBody: "詳細は CHANGELOG / コミット履歴を参照してください。"
+          releaseDraft: false
+          prerelease: false
+          # latest.json を生成させる（updater 用）。
+          includeUpdaterJson: true
