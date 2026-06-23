@@ -102,7 +102,7 @@ export default function ModelPicker({ value, onChange, className, align = "left"
       {open && (
         <div
           className={
-            "absolute top-full z-50 mt-1 flex max-h-80 w-[22rem] max-w-[min(90vw,22rem)] flex-col rounded-md border border-neutral-700 bg-[#252526] shadow-xl " +
+            "absolute top-full z-50 mt-1 flex max-h-[26rem] w-[22rem] max-w-[min(90vw,22rem)] flex-col overflow-hidden rounded-md border border-neutral-700 bg-[#252526] shadow-xl " +
             (align === "right" ? "right-0" : "left-0")
           }
         >
@@ -116,7 +116,7 @@ export default function ModelPicker({ value, onChange, className, align = "left"
               className="w-full rounded border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-xs text-neutral-100 outline-none focus:border-blue-500"
             />
             {providerList.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1">
+              <div className="mt-2 flex max-h-[4.5rem] flex-wrap gap-1 overflow-y-auto pr-1">
                 {providerList.map(([p, n]) => {
                   const on = providers.has(p);
                   return (
