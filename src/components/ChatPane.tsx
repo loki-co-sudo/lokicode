@@ -442,7 +442,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     <div className="flex h-full flex-col bg-[#1b1b1c]">
       <div className="flex items-center gap-2 border-b border-neutral-800 bg-[#252526] px-3 py-2">
         <span className="text-sm font-medium text-neutral-200">AI Agent</span>
-        <ModelPicker value={model} onChange={handleModelChange} listId="header-models" className="min-w-0 flex-1" />
+        <ModelPicker value={model} onChange={handleModelChange} listId="header-models" align="right" className="min-w-0 flex-1" />
         <button onClick={handleClear} title="会話をクリア" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
