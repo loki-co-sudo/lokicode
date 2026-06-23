@@ -217,6 +217,49 @@ function PlanCard({ item }: { item: Extract<AgentItem, { kind: "plan" }> }) {
   );
 }
 
+function Toggle({
+  checked,
+  onChange,
+  label,
+  title,
+  accent = "bg-blue-600",
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: React.ReactNode;
+  title?: string;
+  accent?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      title={title}
+      className={"flex items-center gap-1.5 text-xs " + (disabled ? "opacity-40" : "text-neutral-300")}
+    >
+      <span
+        className={
+          "relative inline-block h-4 w-7 shrink-0 rounded-full transition-colors " +
+          (checked ? accent : "bg-neutral-600")
+        }
+      >
+        <span
+          className={
+            "absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all " +
+            (checked ? "left-[14px]" : "left-0.5")
+          }
+        />
+      </span>
+      {label}
+    </button>
+  );
+}
+
 const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   { onOpenSettings, settingsVersion, currentCode, currentFileName, currentFilePath, workspaceRoot },
   ref,
@@ -236,7 +279,6 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [agentMode, setAgentMode] = usePersistentBool("lokicode.agentMode", true);
   const [autoApprove, setAutoApprove] = usePersistentBool("lokicode.autoApprove", false);
   const [deepReasoning, setDeepReasoning] = usePersistentBool("lokicode.deepReasoning", false);
-  const [reasoningTools, setReasoningTools] = usePersistentBool("lokicode.reasoningTools", false);
   const [depth, setDepth] = useState<number>(() => {
     const v = Number(localStorage.getItem("lokicode.depth"));
     return v >= 1 && v <= MAX_DEPTH ? v : 4;
@@ -328,12 +370,12 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       promptTokens,
       depth,
       samples,
-      useTools: reasoningTools,
+      useTools: agentMode,
       thinking: priceOf(thinkingModel || model),
       synthesis: priceOf(synthesisModel || model),
       calib,
     });
-  }, [models, promptTokens, depth, samples, reasoningTools, thinkingModel, synthesisModel, model, calib]);
+  }, [models, promptTokens, depth, samples, agentMode, thinkingModel, synthesisModel, model, calib]);
 
   useImperativeHandle(ref, () => ({
     prefill(text: string) {
@@ -536,7 +578,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             samples,
             thinkingModel: thinkingModel || undefined,
             synthesisModel: synthesisModel || undefined,
-            useTools: reasoningTools,
+            useTools: agentMode,
             autoApprove,
             signal,
           },
@@ -592,7 +634,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     } finally {
       if (signal.aborted) appendItem({ kind: "assistant", content: "_（停止しました）_" });
       // Calibrate the tool multiplier from this run, then refresh the estimate.
-      if (deepReasoning && reasoningTools) {
+      if (deepReasoning && agentMode) {
         recordToolRun(callCountRef.current, depth + 2);
       }
       setCalib(loadCalib());
@@ -790,12 +832,36 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       )}
 
       <div className="border-t border-neutral-800 p-3">
-        <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-400">
-          <label className="flex items-center gap-1.5" title="再帰深度ループで思考を反復してから回答します">
-            <input type="checkbox" checked={deepReasoning} onChange={(e) => setDeepReasoning(e.target.checked)} className="accent-indigo-500" />
-            🧠 ディープ推論
-          </label>
-          {deepReasoning ? (
+        <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-neutral-400">
+          <Toggle
+            checked={agentMode}
+            onChange={setAgentMode}
+            label={agentMode ? "Agent モード" : "Chat モード"}
+            title="ON: AI がツール（ファイル読み書き・コマンド・検索）を使って作業します。OFF: 通常のチャット。"
+          />
+          <Toggle
+            checked={deepReasoning}
+            onChange={setDeepReasoning}
+            accent="bg-indigo-500"
+            label="ディープ推論"
+            title="ドラフト→内省→合成を反復して回答の質を上げます（API 呼び出しが増え高コスト）。"
+          />
+          {agentMode && (
+            <Toggle
+              checked={autoApprove}
+              onChange={setAutoApprove}
+              accent="bg-amber-500"
+              label="自動承認"
+              title="承認なしで書き込み・コマンドを実行します（注意）。"
+            />
+          )}
+          <Toggle
+            checked={includeFile}
+            onChange={setIncludeFile}
+            label="現在のファイルを文脈に含める"
+          />
+
+          {deepReasoning && (
             <>
               <label className="flex items-center gap-1.5" title="内省（自己検証）の反復回数。多いほど高品質・高コスト">
                 思考深度
@@ -809,7 +875,23 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
                 />
                 <span className="w-5 text-center font-mono text-indigo-300">{depth}</span>
               </label>
-              <div className="flex w-full items-center gap-1 text-[11px] text-neutral-500" title="思考/合成モデル・思考深度・サンプル数・ツール使用から概算した OpenRouter 料金（送信前の目安）">
+              <label
+                className="flex items-center gap-1.5"
+                title="独立したドラフトを並列生成し、投票・統合して精度を上げます（self-consistency）。Agent モード時は無効"
+              >
+                サンプル数
+                <input
+                  type="range"
+                  min={1}
+                  max={MAX_SAMPLES}
+                  value={samples}
+                  onChange={(e) => setSamples(Number(e.target.value))}
+                  disabled={agentMode}
+                  className="accent-indigo-500 disabled:opacity-40"
+                />
+                <span className="w-4 text-center font-mono text-indigo-300">{samples}</span>
+              </label>
+              <div className="flex w-full items-center gap-1 text-[11px] text-neutral-500" title="思考/合成モデル・思考深度・サンプル数・Agent モードから概算した OpenRouter 料金（送信前の目安）">
                 <span>💰 概算コスト:</span>
                 {costEstimate.ok ? (
                   <span className="font-mono text-amber-300/90">
@@ -820,54 +902,13 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
                 )}
                 {costEstimate.ok && (
                   <span className="text-neutral-600">
-                    （約 {costEstimate.calls} 回の API 呼び出し想定{reasoningTools ? "・ツール込み" : ""}）
+                    （約 {costEstimate.calls} 回の API 呼び出し想定{agentMode ? "・ツール込み" : ""}）
                   </span>
                 )}
                 {costEstimate.calibrated && <span className="text-emerald-600/80" title="過去の実使用量から補正済み">✓ 実測補正</span>}
               </div>
-              <label
-                className="flex items-center gap-1.5"
-                title="独立したドラフトを並列生成し、投票・統合して精度を上げます（self-consistency）。ツール使用時は無効"
-              >
-                サンプル数
-                <input
-                  type="range"
-                  min={1}
-                  max={MAX_SAMPLES}
-                  value={samples}
-                  onChange={(e) => setSamples(Number(e.target.value))}
-                  disabled={reasoningTools}
-                  className="accent-indigo-500 disabled:opacity-40"
-                />
-                <span className="w-4 text-center font-mono text-indigo-300">{samples}</span>
-              </label>
-              <label className="flex items-center gap-1.5" title="各思考フェーズでファイル読み書き・コマンド実行を許可（脳と手の融合）">
-                <input type="checkbox" checked={reasoningTools} onChange={(e) => setReasoningTools(e.target.checked)} className="accent-indigo-500" />
-                推論中にツールを使う
-              </label>
-              {reasoningTools && (
-                <label className="flex items-center gap-1.5" title="承認なしで書き込み・コマンドを実行します（注意）">
-                  <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} className="accent-amber-500" />
-                  自動承認
-                </label>
-              )}
-            </>
-          ) : (
-            <>
-              <label className="flex items-center gap-1.5">
-                <input type="checkbox" checked={agentMode} onChange={(e) => setAgentMode(e.target.checked)} className="accent-blue-600" />
-                エージェント（ツール使用）
-              </label>
-              <label className="flex items-center gap-1.5" title="承認なしで書き込み・コマンドを実行します（注意）">
-                <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} disabled={!agentMode} className="accent-amber-500" />
-                自動承認
-              </label>
             </>
           )}
-          <label className="flex items-center gap-1.5">
-            <input type="checkbox" checked={includeFile} onChange={(e) => setIncludeFile(e.target.checked)} className="accent-blue-600" />
-            現在のファイルを文脈に含める
-          </label>
         </div>
         <div className="flex items-end gap-2">
           <textarea

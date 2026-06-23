@@ -162,6 +162,8 @@ pub struct ModelInfo {
     pub prompt_price: f64,
     /// USD per completion (output) token. 0 when unknown/free.
     pub completion_price: f64,
+    /// Context window in tokens. 0 when unknown.
+    pub context_length: u64,
 }
 
 /// Fetch the list of models currently available on OpenRouter so the picker is
@@ -200,6 +202,7 @@ pub async fn list_models() -> Result<Vec<ModelInfo>, String> {
                         name,
                         prompt_price: price("prompt"),
                         completion_price: price("completion"),
+                        context_length: m["context_length"].as_u64().unwrap_or(0),
                     })
                 })
                 .collect()

@@ -93,6 +93,8 @@ export interface ModelInfo {
   promptPrice: number;
   /** USD per completion (output) token. 0 when unknown/free. */
   completionPrice: number;
+  /** Context window in tokens. 0 when unknown. */
+  contextLength: number;
 }
 
 let modelsCache: ModelInfo[] | null = null;

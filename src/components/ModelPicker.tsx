@@ -17,6 +17,28 @@ function providerOf(id: string): string {
   return i === -1 ? id : id.slice(0, i);
 }
 
+/** Cost tier from the output price (per 1M tokens). */
+function costTier(completionPrice: number, promptPrice: number): { label: string; cls: string } {
+  if (completionPrice <= 0 && promptPrice <= 0) return { label: "無料", cls: "text-sky-400" };
+  const perM = completionPrice * 1_000_000;
+  if (perM < 1) return { label: "低", cls: "text-emerald-400" };
+  if (perM < 10) return { label: "中", cls: "text-amber-400" };
+  return { label: "高", cls: "text-red-400" };
+}
+
+function fmtPerM(price: number): string {
+  const v = price * 1_000_000;
+  if (v <= 0) return "—";
+  return v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`;
+}
+
+function fmtCtx(n: number): string {
+  if (!n) return "";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M`;
+  if (n >= 1000) return `${Math.round(n / 1000)}K`;
+  return String(n);
+}
+
 /**
  * Searchable model picker backed by the auto-updating OpenRouter list.
  * Supports free-text search and per-provider (Claude / GPT / …) filtering.
@@ -156,6 +178,13 @@ export default function ModelPicker({ value, onChange, className, align = "left"
               >
                 <div className="truncate text-xs text-neutral-100">{m.name}</div>
                 <div className="truncate text-[10px] text-neutral-500">{m.id}</div>
+                <div className="flex gap-2 text-[10px] text-neutral-500">
+                  <span>
+                    コスト <span className={costTier(m.completionPrice, m.promptPrice).cls}>{costTier(m.completionPrice, m.promptPrice).label}</span>
+                  </span>
+                  <span>出力 {fmtPerM(m.completionPrice)}/M</span>
+                  {m.contextLength > 0 && <span>ctx {fmtCtx(m.contextLength)}</span>}
+                </div>
               </button>
             ))}
           </div>
