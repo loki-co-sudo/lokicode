@@ -9,6 +9,8 @@ interface ModelPickerProps {
   className?: string;
   /** Which edge the dropdown aligns to (use "right" for right-side pickers). */
   align?: "left" | "right";
+  /** Open the dropdown upward (use "up" when the picker sits near the bottom). */
+  placement?: "down" | "up";
 }
 
 /** Provider key = the part before "/" in an OpenRouter model id (e.g. "anthropic"). */
@@ -43,7 +45,13 @@ function fmtCtx(n: number): string {
  * Searchable model picker backed by the auto-updating OpenRouter list.
  * Supports free-text search and per-provider (Claude / GPT / …) filtering.
  */
-export default function ModelPicker({ value, onChange, className, align = "left" }: ModelPickerProps) {
+export default function ModelPicker({
+  value,
+  onChange,
+  className,
+  align = "left",
+  placement = "down",
+}: ModelPickerProps) {
   const { models, loading, refresh } = useModels();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -124,7 +132,8 @@ export default function ModelPicker({ value, onChange, className, align = "left"
       {open && (
         <div
           className={
-            "absolute top-full z-50 mt-1 flex max-h-[26rem] w-[22rem] max-w-[min(90vw,22rem)] flex-col overflow-hidden rounded-md border border-neutral-700 bg-[#252526] shadow-xl " +
+            "absolute z-50 flex max-h-[26rem] w-[22rem] max-w-[min(90vw,22rem)] flex-col overflow-hidden rounded-md border border-neutral-700 bg-[#252526] shadow-xl " +
+            (placement === "up" ? "bottom-full mb-1 " : "top-full mt-1 ") +
             (align === "right" ? "right-0" : "left-0")
           }
         >

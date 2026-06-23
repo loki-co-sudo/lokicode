@@ -109,6 +109,7 @@ export default function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
     { id: crypto.randomUUID(), name: `ターミナル ${termCounter}` },
   ]);
   const [activeId, setActiveId] = useState(() => tabs[0].id);
+  const [split, setSplit] = useState(false);
 
   function addTab() {
     termCounter += 1;
@@ -161,6 +162,16 @@ export default function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
           </button>
         </div>
         <button
+          onClick={() => setSplit((v) => !v)}
+          title={split ? "タブ表示に戻す" : "分割表示（横並び）"}
+          className={
+            "rounded px-1.5 py-0.5 text-[11px] hover:bg-neutral-700 " +
+            (split ? "text-blue-400" : "text-neutral-400 hover:text-neutral-200")
+          }
+        >
+          ⫿ 分割
+        </button>
+        <button
           onClick={onClose}
           title="パネルを閉じる (Ctrl+J)"
           className="rounded px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
@@ -168,10 +179,17 @@ export default function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
           ✕
         </button>
       </div>
-      <div className="relative min-h-0 flex-1">
+      <div className={"min-h-0 flex-1 " + (split ? "flex" : "relative")}>
         {tabs.map((t) => (
-          <div key={t.id} className={"absolute inset-0 px-1 py-0.5 " + (t.id === activeId ? "" : "hidden")}>
-            <TerminalView id={t.id} cwd={cwd} active={t.id === activeId} />
+          <div
+            key={t.id}
+            className={
+              split
+                ? "relative min-w-0 flex-1 border-r border-neutral-800 px-1 py-0.5"
+                : "absolute inset-0 px-1 py-0.5 " + (t.id === activeId ? "" : "hidden")
+            }
+          >
+            <TerminalView id={t.id} cwd={cwd} active={split || t.id === activeId} />
           </div>
         ))}
       </div>

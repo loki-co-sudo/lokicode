@@ -826,7 +826,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             </div>
           )}
         </div>
-        <ModelPicker value={model} onChange={handleModelChange} listId="header-models" align="right" className="min-w-0 flex-1" />
+        <span className="text-sm font-medium text-neutral-200">AI Agent</span>
+        <div className="flex-1" />
         <button onClick={handleClear} title="会話をクリア" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
@@ -991,6 +992,17 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onChange={setIncludeFile}
             label="現在のファイルを文脈に含める"
           />
+
+          <div className="flex w-full items-center gap-1">
+            <span className="shrink-0 text-[11px] text-neutral-500">モデル</span>
+            <ModelPicker
+              value={model}
+              onChange={handleModelChange}
+              listId="chat-models"
+              placement="up"
+              className="min-w-0 flex-1"
+            />
+          </div>
 
           {deepReasoning && (
             <>
