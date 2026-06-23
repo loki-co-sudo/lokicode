@@ -2,6 +2,12 @@ import { useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+function openExternal(href?: string) {
+  if (!href) return;
+  openUrl(href).catch(() => window.open(href, "_blank"));
+}
 
 function CodeBlock({ children }: { children?: ReactNode }) {
   const ref = useRef<HTMLPreElement>(null);
@@ -43,6 +49,18 @@ export default function Markdown({ content }: { content: string }) {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              onClick={(e) => {
+                e.preventDefault();
+                openExternal(href);
+              }}
+              className="cursor-pointer"
+            >
+              {children}
+            </a>
+          ),
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           code: ({ className, children, ...props }) => {
             const isBlock = /language-/.test(className || "");

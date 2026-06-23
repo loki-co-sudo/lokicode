@@ -20,6 +20,7 @@ import {
 } from "../lib/agent";
 import { runRecurrentReasoning, MAX_DEPTH } from "../lib/reasoning";
 import { loadItems, saveItems, clearItems } from "../lib/chatStorage";
+import { usePersistentBool } from "../lib/usePersistentState";
 import Markdown from "./Markdown";
 import ModelPicker from "./ModelPicker";
 import DiffPreview from "./DiffPreview";
@@ -151,11 +152,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [model, setModel] = useState("");
   const [thinkingModel, setThinkingModel] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("");
-  const [includeFile, setIncludeFile] = useState(false);
-  const [agentMode, setAgentMode] = useState(true);
-  const [autoApprove, setAutoApprove] = useState(false);
-  const [deepReasoning, setDeepReasoning] = useState(false);
-  const [reasoningTools, setReasoningTools] = useState(false);
+  const [includeFile, setIncludeFile] = usePersistentBool("lokicode.includeFile", false);
+  const [agentMode, setAgentMode] = usePersistentBool("lokicode.agentMode", true);
+  const [autoApprove, setAutoApprove] = usePersistentBool("lokicode.autoApprove", false);
+  const [deepReasoning, setDeepReasoning] = usePersistentBool("lokicode.deepReasoning", false);
+  const [reasoningTools, setReasoningTools] = usePersistentBool("lokicode.reasoningTools", false);
   const [depth, setDepth] = useState<number>(() => {
     const v = Number(localStorage.getItem("lokicode.depth"));
     return v >= 1 && v <= MAX_DEPTH ? v : 4;
@@ -195,6 +196,14 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [items, busy, pending]);
+
+  // Auto-grow the input with its content (capped).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+  }, [input]);
 
   function appendItem(item: AgentItem) {
     setItems((prev) => [...prev, item]);
