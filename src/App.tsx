@@ -3,8 +3,11 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import EditorPane from "./components/EditorPane";
 import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
 import SettingsModal from "./components/SettingsModal";
+import ExplorerPane from "./components/ExplorerPane";
 import {
   openFile,
+  openFolder,
+  readFile,
   writeFile,
   saveFileAs,
   fileNameFromPath,
@@ -52,6 +55,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsVersion, setSettingsVersion] = useState(0);
 
+  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
+  const [showSidebar, setShowSidebar] = useState(false);
+
   const [editorPct, setEditorPct] = useState(62);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
@@ -94,6 +100,38 @@ export default function App() {
     setTabs((prev) => [...prev, tab]);
     setActiveId(tab.id);
   }, [tabs]);
+
+  const openPath = useCallback(
+    async (path: string) => {
+      const existing = tabs.find((t) => t.path === path);
+      if (existing) {
+        setActiveId(existing.id);
+        return;
+      }
+      let content: string;
+      try {
+        content = await readFile(path);
+      } catch {
+        return; // non-text / unreadable file
+      }
+      const tab = createTab({
+        name: fileNameFromPath(path),
+        path,
+        language: languageFromPath(path),
+        content,
+      });
+      setTabs((prev) => [...prev, tab]);
+      setActiveId(tab.id);
+    },
+    [tabs],
+  );
+
+  const handleOpenFolder = useCallback(async () => {
+    const dir = await openFolder();
+    if (!dir) return;
+    setWorkspaceRoot(dir);
+    setShowSidebar(true);
+  }, []);
 
   const handleSave = useCallback(async () => {
     const tab = tabs.find((t) => t.id === activeId);
@@ -176,46 +214,72 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-[#1e1e1e] text-neutral-200">
-      <header className="flex items-center gap-2 border-b border-neutral-800 bg-[#323233] px-4 py-2">
+      <header className="flex items-center gap-2 border-b border-neutral-800 bg-[#323233] px-3 py-2">
+        <button
+          onClick={() => (workspaceRoot ? setShowSidebar((s) => !s) : handleOpenFolder())}
+          title={workspaceRoot ? "エクスプローラの表示切替" : "フォルダを開く"}
+          className={
+            "rounded p-1 hover:bg-neutral-700 " +
+            (showSidebar ? "text-blue-400" : "text-neutral-400 hover:text-neutral-200")
+          }
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 7h6l2 2h10v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+          </svg>
+        </button>
         <span className="text-sm font-semibold tracking-wide text-neutral-100">lokicode</span>
-        <span className="text-xs text-neutral-500">— VS Code-style editor with AI chat</span>
+        <span className="text-xs text-neutral-500">— VS Code-style editor with AI agent</span>
       </header>
 
-      <div
-        ref={containerRef}
-        className="flex min-h-0 flex-1"
-        onMouseMove={onMouseMove}
-        onMouseUp={stopDrag}
-        onMouseLeave={stopDrag}
-      >
-        <div style={{ width: `${editorPct}%` }} className="min-w-0">
-          <EditorPane
-            tabs={tabs}
-            activeTab={activeTab}
-            onSelectTab={setActiveId}
-            onCloseTab={handleCloseTab}
-            onNewTab={handleNewTab}
-            onChange={handleChange}
-            onOpen={handleOpen}
-            onSave={handleSave}
-            onSendSelection={handleSendSelection}
-          />
-        </div>
+      <div className="flex min-h-0 flex-1">
+        {showSidebar && workspaceRoot && (
+          <aside className="w-56 shrink-0 border-r border-neutral-800">
+            <ExplorerPane
+              root={workspaceRoot}
+              activePath={activeTab.path}
+              onOpenFile={openPath}
+              onOpenFolder={handleOpenFolder}
+              onClose={() => setShowSidebar(false)}
+            />
+          </aside>
+        )}
 
         <div
-          onMouseDown={onMouseDown}
-          className="w-1 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-500"
-        />
+          ref={containerRef}
+          className="flex min-h-0 flex-1"
+          onMouseMove={onMouseMove}
+          onMouseUp={stopDrag}
+          onMouseLeave={stopDrag}
+        >
+          <div style={{ width: `${editorPct}%` }} className="min-w-0">
+            <EditorPane
+              tabs={tabs}
+              activeTab={activeTab}
+              onSelectTab={setActiveId}
+              onCloseTab={handleCloseTab}
+              onNewTab={handleNewTab}
+              onChange={handleChange}
+              onOpen={handleOpen}
+              onSave={handleSave}
+              onSendSelection={handleSendSelection}
+            />
+          </div>
 
-        <div style={{ width: `${100 - editorPct}%` }} className="min-w-0">
-          <ChatPane
-            ref={chatRef}
-            onOpenSettings={() => setSettingsOpen(true)}
-            settingsVersion={settingsVersion}
-            currentCode={activeTab.content}
-            currentFileName={activeTab.name}
-            currentFilePath={activeTab.path}
+          <div
+            onMouseDown={onMouseDown}
+            className="w-1 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-500"
           />
+
+          <div style={{ width: `${100 - editorPct}%` }} className="min-w-0">
+            <ChatPane
+              ref={chatRef}
+              onOpenSettings={() => setSettingsOpen(true)}
+              settingsVersion={settingsVersion}
+              currentCode={activeTab.content}
+              currentFileName={activeTab.name}
+              currentFilePath={activeTab.path}
+            />
+          </div>
         </div>
       </div>
 

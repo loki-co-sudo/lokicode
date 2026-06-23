@@ -15,6 +15,7 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DirEntry {
     name: String,
     is_dir: bool,

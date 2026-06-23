@@ -20,6 +20,31 @@ export async function writeFile(path: string, contents: string): Promise<void> {
   await invoke("write_text_file", { path, contents });
 }
 
+export function readFile(path: string): Promise<string> {
+  return invoke<string>("read_text_file", { path });
+}
+
+export interface DirEntry {
+  name: string;
+  isDir: boolean;
+}
+
+export function listDir(path: string): Promise<DirEntry[]> {
+  return invoke<DirEntry[]>("list_dir", { path });
+}
+
+/** Open a folder picker; returns the chosen directory path or null. */
+export async function openFolder(): Promise<string | null> {
+  const selected = await open({ directory: true, multiple: false });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** Join a directory and child name using the directory's separator. */
+export function joinPath(dir: string, name: string): string {
+  const sep = dir.includes("\\") ? "\\" : "/";
+  return dir.endsWith(sep) ? dir + name : dir + sep + name;
+}
+
 /** Show a save dialog and write; returns the chosen path, or null if cancelled. */
 export async function saveFileAs(
   contents: string,
