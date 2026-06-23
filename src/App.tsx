@@ -27,6 +27,7 @@ import {
 } from "./lib/files";
 import { listFiles } from "./lib/search";
 import { addRecentFile, addRecentFolder, recentFolders } from "./lib/recent";
+import { loadKeybindings, comboFromEvent, type ActionId } from "./lib/keybindings";
 
 export interface Tab {
   id: string;
@@ -330,34 +331,35 @@ export default function App() {
     [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setAutoSave, setTheme, activeTab.path],
   );
 
-  // Global shortcuts: save, palette/quick-open, and panel toggles.
+  // Configurable keyboard shortcuts (reloaded when settings change).
+  const [keys, setKeys] = useState(() => loadKeybindings());
+  useEffect(() => setKeys(loadKeybindings()), [settingsVersion]);
+
   useEffect(() => {
+    const actions: Record<ActionId, () => void> = {
+      save: () => handleSave(),
+      palette: () => openPalette("command"),
+      quickOpen: () => openPalette("file"),
+      toggleSidebar: () => setSidebarView((cur) => (cur ? null : lastSidebarRef.current)),
+      toggleChat: () => setChatOpen((v) => !v),
+      toggleTerminal: () => setTerminalOpen((v) => !v),
+      outline: () => {
+        editorInstanceRef.current?.focus();
+        editorInstanceRef.current?.getAction("editor.action.quickOutline")?.run();
+      },
+    };
     function onKey(e: KeyboardEvent) {
-      const mod = e.ctrlKey || e.metaKey;
-      const key = e.key.toLowerCase();
-      if (mod && e.altKey && key === "b") {
+      const combo = comboFromEvent(e);
+      if (!combo) return;
+      const action = (Object.keys(keys) as ActionId[]).find((a) => keys[a] === combo);
+      if (action) {
         e.preventDefault();
-        setChatOpen((v) => !v); // Ctrl+Alt+B: AI エージェントパネル
-      } else if (mod && key === "b") {
-        e.preventDefault();
-        setSidebarView((cur) => (cur ? null : lastSidebarRef.current)); // Ctrl+B: サイドバー
-      } else if (mod && key === "j") {
-        e.preventDefault();
-        setTerminalOpen((v) => !v); // Ctrl+J: ターミナル
-      } else if (mod && e.shiftKey && key === "p") {
-        e.preventDefault();
-        openPalette("command");
-      } else if (mod && key === "p") {
-        e.preventDefault();
-        openPalette("file");
-      } else if (mod && key === "s") {
-        e.preventDefault();
-        handleSave();
+        actions[action]();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleSave, openPalette, setChatOpen, setTerminalOpen]);
+  }, [keys, handleSave, openPalette, setChatOpen, setTerminalOpen]);
 
   const onMouseDown = useCallback(() => {
     dragging.current = true;

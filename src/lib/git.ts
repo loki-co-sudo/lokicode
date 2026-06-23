@@ -93,3 +93,7 @@ export function gitBlame(cwd: string, path: string): Promise<GitBlameLine[]> {
 export function gitRemoteUrl(cwd: string): Promise<string> {
   return invoke<string>("git_remote_url", { cwd });
 }
+
+export function gitApplyCached(cwd: string, patch: string, reverse: boolean): Promise<void> {
+  return invoke("git_apply_cached", { cwd, patch, reverse });
+}

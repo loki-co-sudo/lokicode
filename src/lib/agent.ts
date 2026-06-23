@@ -113,6 +113,25 @@ export const TOOLS = [
   {
     type: "function",
     function: {
+      name: "parallel_query",
+      description:
+        "Answer several independent sub-questions in parallel (no tools / read-only) and get all results at once. Use to research multiple files or aspects concurrently, then synthesize.",
+      parameters: {
+        type: "object",
+        properties: {
+          tasks: {
+            type: "array",
+            description: "Independent prompts to answer in parallel.",
+            items: { type: "string" },
+          },
+        },
+        required: ["tasks"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "update_plan",
       description:
         "Record or update a step-by-step plan for a multi-step task so the user can follow progress. Call it at the start and whenever a step's status changes. Keep exactly one step 'in_progress' at a time.",
@@ -175,6 +194,24 @@ async function execTool(
       return truncate(
         `exit code: ${out.code}\n--- stdout ---\n${out.stdout}\n--- stderr ---\n${out.stderr}`,
       );
+    }
+    case "parallel_query": {
+      const tasks = Array.isArray(args.tasks) ? args.tasks.map(String).filter(Boolean) : [];
+      if (tasks.length === 0) return "tasks が空です。";
+      const results = await Promise.all(
+        tasks.map(async (t, i) => {
+          try {
+            const r = await invoke<{ content: string }>("complete", {
+              messages: [{ role: "user", content: t }],
+              model: null,
+            });
+            return `## サブタスク ${i + 1}\n${t}\n\n${r.content}`;
+          } catch (e) {
+            return `## サブタスク ${i + 1}\n${t}\n\nエラー: ${e instanceof Error ? e.message : String(e)}`;
+          }
+        }),
+      );
+      return truncate(results.join("\n\n---\n\n"));
     }
     case "grep_search": {
       const root = args.path ? String(args.path) : workspaceRoot;

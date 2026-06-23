@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
 import { getSettings, saveSettings, type SettingsStatus } from "../lib/openrouter";
+import {
+  loadKeybindings,
+  saveKeybindings,
+  comboFromEvent,
+  ACTION_LABELS,
+  DEFAULT_KEYS,
+  type ActionId,
+} from "../lib/keybindings";
 import ModelPicker from "./ModelPicker";
 import GithubAccount from "./GithubAccount";
 
@@ -16,10 +24,13 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
   const [thinkingModel, setThinkingModel] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [keys, setKeys] = useState(() => loadKeybindings());
+  const [capturing, setCapturing] = useState<ActionId | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    setKeys(loadKeybindings());
     getSettings().then((s) => {
       setStatus(s);
       setModel(s.model);
@@ -29,6 +40,22 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
       setApiKey(""); // never prefill the secret
     });
   }, [open]);
+
+  // While capturing, the next key combo is bound to the selected action.
+  useEffect(() => {
+    if (!capturing) return;
+    const action = capturing;
+    function onKey(e: KeyboardEvent) {
+      e.preventDefault();
+      e.stopPropagation();
+      const combo = comboFromEvent(e);
+      if (!combo) return; // modifier-only — keep waiting
+      setKeys((k) => ({ ...k, [action]: combo }));
+      setCapturing(null);
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturing]);
 
   if (!open) return null;
 
@@ -43,6 +70,7 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
         synthesisModel: synthesisModel.trim(),
         baseUrl: baseUrl.trim(),
       });
+      saveKeybindings(keys);
       onSaved();
       onClose();
     } finally {
@@ -122,6 +150,34 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
             onChange={setSynthesisModel}
             listId="settings-synthesis-models"
           />
+        </div>
+
+        <div className="mb-4 rounded-md border border-neutral-700 bg-[#1e1e1e] p-3">
+          <p className="mb-2 text-xs font-medium text-neutral-300">キーボードショートカット</p>
+          <div className="space-y-1">
+            {(Object.keys(ACTION_LABELS) as ActionId[]).map((a) => (
+              <div key={a} className="flex items-center gap-2 text-xs">
+                <span className="flex-1 text-neutral-400">{ACTION_LABELS[a]}</span>
+                <button
+                  onClick={() => setCapturing(a)}
+                  className={
+                    "rounded border px-2 py-0.5 font-mono " +
+                    (capturing === a
+                      ? "border-blue-500 bg-blue-600/20 text-blue-200"
+                      : "border-neutral-700 bg-[#252526] text-neutral-200 hover:border-neutral-600")
+                  }
+                >
+                  {capturing === a ? "キーを押す…" : keys[a]}
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => setKeys({ ...DEFAULT_KEYS })}
+            className="mt-2 text-[11px] text-neutral-500 hover:text-neutral-300"
+          >
+            既定に戻す
+          </button>
         </div>
 
         <div className="mb-4">

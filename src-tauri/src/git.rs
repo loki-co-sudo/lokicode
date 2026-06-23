@@ -79,6 +79,50 @@ fn run_git(cwd: &str, args: &[&str]) -> Result<(String, String, i32), String> {
     ))
 }
 
+/// Run a git command feeding `input` to its stdin (used for `git apply`).
+fn run_git_stdin(cwd: &str, args: &[&str], input: &str) -> Result<(String, String, i32), String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("git の実行に失敗しました: {e}"))?;
+    {
+        let mut stdin = child.stdin.take().ok_or("stdin を開けません".to_string())?;
+        stdin.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
+        // stdin dropped here → EOF
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    Ok((
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+        out.status.code().unwrap_or(-1),
+    ))
+}
+
+/// Apply a unified-diff patch to the index (`git apply --cached`). `reverse`
+/// unstages. Used for hunk-level staging.
+#[tauri::command]
+pub fn git_apply_cached(cwd: String, patch: String, reverse: bool) -> Result<(), String> {
+    let mut args = vec!["apply", "--cached", "--whitespace=nowarn", "--unidiff-zero"];
+    if reverse {
+        args.push("--reverse");
+    }
+    let (_o, e, c) = run_git_stdin(&cwd, &args, &patch)?;
+    if c != 0 {
+        return Err(if e.trim().is_empty() {
+            "パッチの適用に失敗しました。".to_string()
+        } else {
+            e
+        });
+    }
+    Ok(())
+}
+
 fn parse_branch(s: &str) -> String {
     if let Some(idx) = s.find("...") {
         s[..idx].trim().to_string()
