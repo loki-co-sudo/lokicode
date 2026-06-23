@@ -22,6 +22,7 @@ import { runRecurrentReasoning, MAX_DEPTH } from "../lib/reasoning";
 import { loadItems, saveItems, clearItems } from "../lib/chatStorage";
 import Markdown from "./Markdown";
 import ModelPicker from "./ModelPicker";
+import DiffPreview from "./DiffPreview";
 
 interface ChatPaneProps {
   onOpenSettings: () => void;
@@ -411,11 +412,20 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           <p className="mb-1 font-medium text-amber-300">
             AI が次の操作を実行しようとしています（{toolLabel(pending.name)}）
           </p>
-          <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 text-[11px] text-neutral-200">
-            {pending.name === "run_command"
-              ? String(pending.args.command ?? "")
-              : JSON.stringify(pending.args, null, 2)}
-          </pre>
+          <div className="mb-2">
+            {pending.name === "write_file" ? (
+              <DiffPreview
+                path={String(pending.args.path ?? "")}
+                newContent={String(pending.args.content ?? "")}
+              />
+            ) : (
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 text-[11px] text-neutral-200">
+                {pending.name === "run_command"
+                  ? String(pending.args.command ?? "")
+                  : JSON.stringify(pending.args, null, 2)}
+              </pre>
+            )}
+          </div>
           <div className="flex justify-end gap-2">
             <button onClick={() => resolveApproval(false)} className="rounded px-3 py-1 text-neutral-300 hover:bg-neutral-700">
               拒否
