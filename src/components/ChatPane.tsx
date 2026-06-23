@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -20,6 +21,8 @@ import {
   type Todo,
 } from "../lib/agent";
 import { runRecurrentReasoning, MAX_DEPTH, MAX_SAMPLES } from "../lib/reasoning";
+import { useModels } from "../lib/useModels";
+import { estimateDeepReasoningCost } from "../lib/cost";
 import { loadItems, saveItems, clearItems } from "../lib/chatStorage";
 import { usePersistentBool } from "../lib/usePersistentState";
 import Markdown from "./Markdown";
@@ -220,6 +223,35 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
+
+  const { models } = useModels();
+
+  // Approximate input tokens of the base prompt that will be sent (system +
+  // history + optional active file + the pending input).
+  const promptTokens = useMemo(() => {
+    let chars = input.length;
+    for (const it of items) {
+      if (it.kind === "user" || it.kind === "assistant") chars += it.content.length;
+    }
+    if (includeFile) chars += currentCode.length;
+    return 200 + Math.ceil(chars / 3.5);
+  }, [items, input, includeFile, currentCode]);
+
+  // Rough pre-send cost estimate for deep-reasoning runs (shown by the depth slider).
+  const costEstimate = useMemo(() => {
+    const priceOf = (id: string) => {
+      const m = models.find((x) => x.id === id);
+      return m ? { promptPrice: m.promptPrice, completionPrice: m.completionPrice } : undefined;
+    };
+    return estimateDeepReasoningCost({
+      promptTokens,
+      depth,
+      samples,
+      useTools: reasoningTools,
+      thinking: priceOf(thinkingModel || model),
+      synthesis: priceOf(synthesisModel || model),
+    });
+  }, [models, promptTokens, depth, samples, reasoningTools, thinkingModel, synthesisModel, model]);
 
   useImperativeHandle(ref, () => ({
     prefill(text: string) {
@@ -577,6 +609,21 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
                 />
                 <span className="w-5 text-center font-mono text-indigo-300">{depth}</span>
               </label>
+              <div className="flex w-full items-center gap-1 text-[11px] text-neutral-500" title="思考/合成モデル・思考深度・サンプル数・ツール使用から概算した OpenRouter 料金（送信前の目安）">
+                <span>💰 概算コスト:</span>
+                {costEstimate.ok ? (
+                  <span className="font-mono text-amber-300/90">
+                    ≈ ${costEstimate.usd < 0.01 ? costEstimate.usd.toFixed(4) : costEstimate.usd.toFixed(3)}
+                  </span>
+                ) : (
+                  <span className="text-neutral-600">モデル価格不明（一覧から選択すると表示）</span>
+                )}
+                {costEstimate.ok && (
+                  <span className="text-neutral-600">
+                    （約 {costEstimate.calls} 回の API 呼び出し想定{reasoningTools ? "・ツール込み" : ""}）
+                  </span>
+                )}
+              </div>
               <label
                 className="flex items-center gap-1.5"
                 title="独立したドラフトを並列生成し、投票・統合して精度を上げます（self-consistency）。ツール使用時は無効"

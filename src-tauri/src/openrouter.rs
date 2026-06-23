@@ -154,9 +154,14 @@ pub fn save_settings(
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
+    /// USD per prompt (input) token. 0 when unknown/free.
+    pub prompt_price: f64,
+    /// USD per completion (output) token. 0 when unknown/free.
+    pub completion_price: f64,
 }
 
 /// Fetch the list of models currently available on OpenRouter so the picker is
@@ -184,7 +189,18 @@ pub async fn list_models() -> Result<Vec<ModelInfo>, String> {
                 .filter_map(|m| {
                     let id = m["id"].as_str()?.to_string();
                     let name = m["name"].as_str().unwrap_or(&id).to_string();
-                    Some(ModelInfo { id, name })
+                    let price = |k: &str| {
+                        m["pricing"][k]
+                            .as_str()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0)
+                    };
+                    Some(ModelInfo {
+                        id,
+                        name,
+                        prompt_price: price("prompt"),
+                        completion_price: price("completion"),
+                    })
                 })
                 .collect()
         })

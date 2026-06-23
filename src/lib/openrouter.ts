@@ -89,6 +89,10 @@ export interface SettingsStatus {
 export interface ModelInfo {
   id: string;
   name: string;
+  /** USD per prompt (input) token. 0 when unknown/free. */
+  promptPrice: number;
+  /** USD per completion (output) token. 0 when unknown/free. */
+  completionPrice: number;
 }
 
 let modelsCache: ModelInfo[] | null = null;
