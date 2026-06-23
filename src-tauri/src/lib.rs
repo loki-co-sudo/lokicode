@@ -2,6 +2,7 @@ mod git;
 mod github;
 mod openrouter;
 mod search;
+mod terminal;
 
 use serde::Serialize;
 
@@ -130,6 +131,7 @@ pub fn run() {
     let _ = dotenvy::dotenv();
 
     tauri::Builder::default()
+        .manage(terminal::TerminalState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -146,6 +148,9 @@ pub fn run() {
             search::grep_search,
             search::list_files,
             search::replace_in_files,
+            terminal::terminal_start,
+            terminal::terminal_write,
+            terminal::terminal_kill,
             openrouter::list_models,
             openrouter::get_settings,
             openrouter::save_settings,

@@ -1,6 +1,4 @@
-import { useRef } from "react";
 import Editor from "@monaco-editor/react";
-import type { editor as MonacoEditor } from "monaco-editor";
 import type { Tab } from "../App";
 
 interface EditorPaneProps {
@@ -10,9 +8,6 @@ interface EditorPaneProps {
   onCloseTab: (id: string) => void;
   onNewTab: () => void;
   onChange: (value: string) => void;
-  onOpen: () => void;
-  onSave: () => void;
-  onSendSelection: (code: string, language: string) => void;
   theme: "dark" | "light";
 }
 
@@ -23,24 +18,8 @@ export default function EditorPane({
   onCloseTab,
   onNewTab,
   onChange,
-  onOpen,
-  onSave,
-  onSendSelection,
   theme,
 }: EditorPaneProps) {
-  const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
-
-  function handleSendSelection() {
-    const editor = editorRef.current;
-    if (!editor) return;
-    const selection = editor.getSelection();
-    const model = editor.getModel();
-    if (!model) return;
-    const selected =
-      selection && !selection.isEmpty() ? model.getValueInRange(selection) : model.getValue();
-    if (selected.trim()) onSendSelection(selected, activeTab.language);
-  }
-
   return (
     <div className="flex h-full flex-col bg-[#1e1e1e]">
       {/* Tabs bar */}
@@ -52,6 +31,13 @@ export default function EditorPane({
               <div
                 key={tab.id}
                 onClick={() => onSelectTab(tab.id)}
+                onMouseDown={(e) => {
+                  if (e.button === 1) {
+                    // middle-click closes the tab
+                    e.preventDefault();
+                    onCloseTab(tab.id);
+                  }
+                }}
                 className={
                   "group flex cursor-pointer items-center gap-2 border-r border-neutral-800 px-3 py-2 " +
                   (active ? "bg-[#1e1e1e] text-neutral-100" : "text-neutral-400 hover:bg-neutral-800")
@@ -90,18 +76,6 @@ export default function EditorPane({
             +
           </button>
         </div>
-        {/* Toolbar */}
-        <div className="flex items-center gap-1 border-l border-neutral-800 px-2">
-          <button onClick={onOpen} title="ファイルを開く" className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-700">
-            開く
-          </button>
-          <button onClick={onSave} title="保存 (Ctrl+S)" className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-700">
-            保存
-          </button>
-          <button onClick={handleSendSelection} title="選択範囲（なければ全体）を AI チャットへ" className="rounded px-2 py-1 text-xs text-blue-300 hover:bg-neutral-700">
-            選択をAIへ
-          </button>
-        </div>
       </div>
 
       <div className="min-h-0 flex-1">
@@ -111,9 +85,6 @@ export default function EditorPane({
           path={activeTab.id}
           language={activeTab.language}
           value={activeTab.content}
-          onMount={(editor) => {
-            editorRef.current = editor;
-          }}
           onChange={(v) => onChange(v ?? "")}
           options={{
             fontSize: 14,

@@ -9,6 +9,7 @@ import SourceControlPane from "./components/SourceControlPane";
 import GitDiffView, { type DiffTarget } from "./components/GitDiffView";
 import UpdateBanner from "./components/UpdateBanner";
 import SearchPane from "./components/SearchPane";
+import TerminalPanel from "./components/TerminalPanel";
 import CommandPalette, { type Command } from "./components/CommandPalette";
 import ActivityBar, { type SidebarView } from "./components/ActivityBar";
 import {
@@ -81,6 +82,13 @@ export default function App() {
   const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
   // Whether the right-hand AI Agent pane is shown (collapsible like the sidebar).
   const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
+  // Bottom integrated terminal panel.
+  const [terminalOpen, setTerminalOpen] = usePersistentBool("lokicode.terminalOpen", false);
+  // Remember the last non-null sidebar view so Ctrl+B can reopen it.
+  const lastSidebarRef = useRef<Exclude<SidebarView, null>>("explorer");
+  useEffect(() => {
+    if (sidebarView) lastSidebarRef.current = sidebarView;
+  }, [sidebarView]);
 
   // Color theme (dark default). Applied as the `light` class on <html>.
   const [theme, setTheme] = usePersistentString("lokicode.theme", "dark");
@@ -224,15 +232,6 @@ export default function App() {
     [tabs, activeId],
   );
 
-  const handleSendSelection = useCallback(
-    (code: string, language: string) => {
-      setChatOpen(true); // reveal the pane if it was collapsed
-      const fence = language && language !== "plaintext" ? language : "";
-      chatRef.current?.prefill(`以下のコードについて教えてください:\n\n\`\`\`${fence}\n${code}\n\`\`\``);
-    },
-    [setChatOpen],
-  );
-
   const openPalette = useCallback(
     async (mode: "command" | "file") => {
       if (mode === "file") {
@@ -259,7 +258,8 @@ export default function App() {
       { id: "view-explorer", title: "エクスプローラを表示", run: () => setSidebarView("explorer") },
       { id: "view-search", title: "検索 / 置換を表示", run: () => setSidebarView("search") },
       { id: "view-git", title: "ソース管理を表示", run: () => setSidebarView("git") },
-      { id: "toggle-chat", title: "AI エージェントの表示切替", run: () => setChatOpen((v) => !v) },
+      { id: "toggle-chat", title: "AI エージェントの表示切替", hint: "Ctrl+Alt+B", run: () => setChatOpen((v) => !v) },
+      { id: "toggle-terminal", title: "ターミナルの表示切替", hint: "Ctrl+J", run: () => setTerminalOpen((v) => !v) },
       {
         id: "toggle-theme",
         title: "テーマ切替（ライト / ダーク）",
@@ -268,27 +268,37 @@ export default function App() {
       { id: "settings", title: "設定を開く", run: () => setSettingsOpen(true) },
       { id: "check-update", title: "更新を確認", run: () => setUpdateCheckNonce((n) => n + 1) },
     ],
-    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTheme],
+    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setTheme],
   );
 
-  // Ctrl/Cmd+S to save; Ctrl+Shift+P command palette; Ctrl+P quick open.
+  // Global shortcuts: save, palette/quick-open, and panel toggles.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
+      const key = e.key.toLowerCase();
+      if (mod && e.altKey && key === "b") {
+        e.preventDefault();
+        setChatOpen((v) => !v); // Ctrl+Alt+B: AI エージェントパネル
+      } else if (mod && key === "b") {
+        e.preventDefault();
+        setSidebarView((cur) => (cur ? null : lastSidebarRef.current)); // Ctrl+B: サイドバー
+      } else if (mod && key === "j") {
+        e.preventDefault();
+        setTerminalOpen((v) => !v); // Ctrl+J: ターミナル
+      } else if (mod && e.shiftKey && key === "p") {
         e.preventDefault();
         openPalette("command");
-      } else if (mod && e.key.toLowerCase() === "p") {
+      } else if (mod && key === "p") {
         e.preventDefault();
         openPalette("file");
-      } else if (mod && e.key.toLowerCase() === "s") {
+      } else if (mod && key === "s") {
         e.preventDefault();
         handleSave();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleSave, openPalette]);
+  }, [handleSave, openPalette, setChatOpen, setTerminalOpen]);
 
   const onMouseDown = useCallback(() => {
     dragging.current = true;
@@ -420,6 +430,7 @@ export default function App() {
           )
         )}
 
+        <div className="flex min-h-0 flex-1 flex-col">
         <div
           ref={containerRef}
           className="flex min-h-0 flex-1"
@@ -446,9 +457,6 @@ export default function App() {
                 onCloseTab={handleCloseTab}
                 onNewTab={handleNewTab}
                 onChange={handleChange}
-                onOpen={handleOpen}
-                onSave={handleSave}
-                onSendSelection={handleSendSelection}
                 theme={theme === "light" ? "light" : "dark"}
               />
             )}
@@ -476,6 +484,13 @@ export default function App() {
               workspaceRoot={workspaceRoot}
             />
           </div>
+        </div>
+
+          {terminalOpen && (
+            <div className="h-56 shrink-0">
+              <TerminalPanel cwd={workspaceRoot} onClose={() => setTerminalOpen(false)} />
+            </div>
+          )}
         </div>
       </div>
 
