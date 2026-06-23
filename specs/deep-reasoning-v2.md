@@ -8,7 +8,7 @@
 [`src/lib/agent.ts`](../src/lib/agent.ts)（読み取り専用ツールモード）、
 [`src/lib/cost.ts`](../src/lib/cost.ts)（概算コスト）。
 
-導入バージョン: **0.21.0**（オーケストレータ初版）→ **0.22.0**（検証器ガイド = v2.1、§8）→ **0.23.0**（意図駆動の設計ブリーフ＋十分性ゲート = v2.2、§9）。基盤の旧設計は [`specs/architecture.md`](architecture.md)。
+導入バージョン: **0.21.0**（オーケストレータ初版）→ **0.22.0**（検証器ガイド = v2.1、§8）→ **0.23.0**（意図駆動の設計ブリーフ＋十分性ゲート = v2.2、§9）→ **0.24.0**（自律性5原則: 逆質問・制約・セルフチェック = §10）。基盤の旧設計は [`specs/architecture.md`](architecture.md)。
 
 ---
 
@@ -171,3 +171,18 @@ v2.1 で「ジュニアエンジニア向けに解説して」を投げたら、
 - 全体を v1 に戻す: §5 の `USE_ORCHESTRATOR = false`（最優先の戻し口、不変）。
 - v2.1 相当に戻す（ブリーフ無し）: git で 0.23.0 を revert（reasoning.ts のみ）。検証器の挙動調整は `PASS_SCORE`/`ESCALATE_BELOW`。
 - 旧アルゴリズム本体（v1）は引き続き `runLinearRecurrentReasoning` に保存。
+
+---
+
+## 10. 自律性の5原則（逆質問・制約・セルフチェック）（0.24.0）
+
+ユーザー提起の「賢いエージェント5原則」（目的と制約の分離 / 思考の言語化 / 自律的例外処理 / セルフチェック / 疎結合化）に対し、CoT・自己点検・疎結合は v2.2 で達成済み。残るギャップ（制約の一級化・逆質問）を実装した。
+
+- **逆質問 `ask_user` ツール（原則3）**: [`agent.ts`](../src/lib/agent.ts) に `ASK_USER_TOOL` を追加。`opts.allowAskUser && cb.askUser` のときだけモデルに提示（**推論サブフェーズには出さない**＝調査中に質問で中断しない）。実行時はループを止めて `cb.askUser(question)` の解決を待ち、回答を tool result として会話へ。UI は [`ChatPane.tsx`](../src/components/ChatPane.tsx) の `AskUserCard`（承認カードと同じ pending 方式、停止で解決）。トップレベルの Agent モードのみ `allowAskUser: true`。
+- **制約の一級化（原則1）**: 設計ブリーフ([`reasoning.ts`](../src/lib/reasoning.ts) `BRIEF`)に **CONSTRAINTS** セクションを追加し、`briefMsgs` に固定。`JUDGE` は制約違反を **CRITICAL 欠陥**、`FINAL` も制約遵守を必須化。
+- **通常 Agent モードの軽量セルフチェック（原則4）**: ChatPane で `runAgent` 後に1回だけ `complete()` で目的・制約に照らし自己点検。`OK` なら何もせず、修正があれば「🔍 セルフチェックによる修正」として追記。トグル `lokicode.selfCheck`（既定ON、`agentMode && !deepReasoning` で表示）。
+- **システムプロンプト**: `buildSystemPrompt` に Operating principles（GOAL/制約優先・不可逆操作の自制・update_plan で計画宣言・曖昧なら ask_user・同手2回失敗で戦略転換・回答前セルフチェック）を追記。
+
+### 復元
+- セルフチェックはトグル OFF で無効。`ask_user` は `allowAskUser` を渡さなければ提示されない（コードで無効化するなら ChatPane の `allowAskUser: true` を外す）。制約・プロンプト追記を含む全体の取り消しは git で 0.24.0 を revert。`USE_ORCHESTRATOR=false` の v1 戻しは引き続き有効。
+- 将来枠（未実装）: 実行サブエージェント、`update_plan` を plan→execute→verify のステートマシンに昇格、構造的な再計画ループ。

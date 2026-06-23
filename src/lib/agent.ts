@@ -162,6 +162,27 @@ export const TOOLS = [
  * phase so grounded research never blocks on (or races over) approval prompts. */
 export const READ_ONLY_TOOLS = TOOLS.filter((t) => !RISKY_TOOLS.has(t.function.name));
 
+/** Clarifying-question tool. Advertised only on interactive agent runs
+ * (opts.allowAskUser) so reasoning sub-phases never interrupt with questions. */
+export const ASK_USER_TOOL = {
+  type: "function",
+  function: {
+    name: "ask_user",
+    description:
+      "Ask the user ONE concise clarifying question when the request is ambiguous or missing " +
+      "information that materially changes the outcome. Returns the user's answer. Prefer this " +
+      "over guessing on consequential ambiguity; never use it for trivial choices you can decide " +
+      "yourself.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "One concise question for the user." },
+      },
+      required: ["question"],
+    },
+  },
+};
+
 function truncate(text: string): string {
   if (text.length <= MAX_RESULT_CHARS) return text;
   return text.slice(0, MAX_RESULT_CHARS) + `\n…(${text.length - MAX_RESULT_CHARS} 文字省略)`;
@@ -249,6 +270,8 @@ export interface AgentCallbacks {
   onFileEdit?: (path: string, prev: string | null) => void;
   /** Ask the user to approve a risky tool call. */
   approve: (name: string, args: Record<string, unknown>) => Promise<boolean>;
+  /** Ask the user a clarifying question and await their answer (ask_user tool). */
+  askUser?: (question: string) => Promise<string>;
   /** Reports token/cost usage for each underlying API call. */
   onUsage?: (usage: Usage) => void;
 }
@@ -263,6 +286,8 @@ export interface AgentOptions {
   /** Restrict to read-only tools (no write_file/run_command): lets investigation
    * phases run unattended and in parallel without approval prompts. */
   readOnly?: boolean;
+  /** Offer the ask_user tool (interactive top-level agent only). */
+  allowAskUser?: boolean;
 }
 
 /**
@@ -278,6 +303,10 @@ export async function runAgent(
   const conv: ApiMessage[] = [...messages];
   let finalText = "";
 
+  const baseTools = opts.readOnly ? READ_ONLY_TOOLS : TOOLS;
+  const advertised =
+    opts.allowAskUser && cb.askUser ? [...baseTools, ASK_USER_TOOL] : baseTools;
+
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     if (opts.signal?.aborted) return finalText;
 
@@ -285,7 +314,7 @@ export async function runAgent(
     let streamed = "";
     const { message: assistant, usage } = await chatOnceStream(
       conv,
-      opts.readOnly ? READ_ONLY_TOOLS : TOOLS,
+      advertised,
       opts.model,
       (chunk) => {
         streamed += chunk;
@@ -319,6 +348,19 @@ export async function runAgent(
         const todos = Array.isArray(args.todos) ? (args.todos as Todo[]) : [];
         cb.onPlan?.(todos);
         conv.push({ role: "tool", tool_call_id: call.id, content: "計画を更新しました。" });
+        continue;
+      }
+
+      // Clarifying question: pause and wait for the user's answer.
+      if (name === "ask_user") {
+        const q = String(args.question ?? "").trim() || "確認したいことがあります。";
+        cb.onToolStart({ name, args });
+        const answer =
+          opts.allowAskUser && cb.askUser
+            ? await cb.askUser(q)
+            : "（この文脈では質問できません。最善の仮定を置いて進めてください）";
+        cb.onToolEnd("done", answer);
+        conv.push({ role: "tool", tool_call_id: call.id, content: `ユーザーの回答: ${answer}` });
         continue;
       }
 

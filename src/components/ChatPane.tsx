@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   streamChat,
+  complete,
   getSettings,
   saveSettings,
   type ApiMessage,
@@ -79,10 +80,15 @@ function buildSystemPrompt(
     role: "system",
     content: `You are lokicode's coding agent embedded in a desktop code editor running on Windows (shell: cmd).
 You can use the provided tools to read/list/write files and run shell commands to actually accomplish the user's request — not just describe it.
+Operating principles:
+- Work from the GOAL and any CONSTRAINTS, not a fixed recipe: choose your own means, but never take irreversible actions beyond what was asked, and respect every stated constraint.
+- For non-trivial tasks, first state a brief plan with update_plan (current understanding, unknowns, steps) and keep exactly one step in_progress; update it as you go.
+- If the request is ambiguous or missing information in a way that materially changes the outcome, use ask_user to ask ONE concise question instead of guessing. Do not ask about trivia you can decide yourself.
+- On errors or missing info, do not freeze or invent facts: gather evidence with tools, and if the same approach fails twice, switch strategy or ask_user rather than repeating it.
+- Before giving your final answer, self-check it against the goal and constraints; if it is incomplete, wrong, or violates a constraint, fix it. Report honestly what you could not verify.
 Guidelines:
 - Use absolute Windows paths.
 - Use grep_search to locate code across the workspace instead of guessing file paths.
-- For multi-step tasks, call update_plan first to lay out the steps, then update it as you progress (keep one step in_progress).
 - Read files before editing them; after changes you may verify by reading files or running commands.
 - write_file and run_command require the user's approval; if a call is denied, propose an alternative.
 - Be concise. Reply in the user's language (Japanese if they write Japanese) and use Markdown.
@@ -310,6 +316,52 @@ function Toggle({
   );
 }
 
+// Clarifying-question prompt (ask_user tool): the agent pauses until answered.
+function AskUserCard({
+  question,
+  onAnswer,
+}: {
+  question: string;
+  onAnswer: (answer: string) => void;
+}) {
+  const [val, setVal] = useState("");
+  return (
+    <div className="mx-3 mb-2 rounded-md border border-sky-600/60 bg-sky-950/30 p-3 text-xs">
+      <p className="mb-1 font-medium text-sky-300">🤔 AI からの確認</p>
+      <p className="mb-2 whitespace-pre-wrap text-neutral-200">{question}</p>
+      <textarea
+        autoFocus
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            if (val.trim()) onAnswer(val.trim());
+          }
+        }}
+        rows={2}
+        placeholder="回答を入力（Enter で送信 / Shift+Enter で改行）"
+        className="mb-2 w-full resize-none rounded border border-neutral-700 bg-[#2a2a2b] px-2 py-1.5 text-neutral-100 outline-none focus:border-sky-500"
+      />
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={() => onAnswer("（ユーザーは回答せず、最善の判断で進めるよう指示）")}
+          className="rounded px-3 py-1 text-neutral-300 hover:bg-neutral-700"
+        >
+          スキップ
+        </button>
+        <button
+          onClick={() => val.trim() && onAnswer(val.trim())}
+          disabled={!val.trim()}
+          className="rounded bg-sky-600 px-3 py-1 font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+        >
+          回答
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   { onOpenSettings, settingsVersion, currentCode, currentFileName, currentFilePath, workspaceRoot },
   ref,
@@ -336,6 +388,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [includeFile, setIncludeFile] = usePersistentBool("lokicode.includeFile", false);
   const [agentMode, setAgentMode] = usePersistentBool("lokicode.agentMode", true);
   const [autoApprove, setAutoApprove] = usePersistentBool("lokicode.autoApprove", false);
+  const [selfCheck, setSelfCheck] = usePersistentBool("lokicode.selfCheck", true);
   const [deepReasoning, setDeepReasoning] = usePersistentBool("lokicode.deepReasoning", false);
   const [depth, setDepth] = useState<number>(() => {
     const v = Number(localStorage.getItem("lokicode.depth"));
@@ -346,6 +399,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     return v >= 1 && v <= MAX_SAMPLES ? v : 1;
   });
   const [pending, setPending] = useState<PendingApproval | null>(null);
+  const [pendingQuestion, setPendingQuestion] = useState<{
+    question: string;
+    resolve: (answer: string) => void;
+  } | null>(null);
   const [usage, setUsage] = useState({ tokens: 0, cost: 0 });
   // Session cost cap in USD (0 = off). Warns / confirms before exceeding.
   const [costLimit, setCostLimit] = useState<number>(() => {
@@ -713,7 +770,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           },
         );
       } else if (agentMode) {
-        await runAgent(
+        const finalAnswer = await runAgent(
           base,
           {
             onAssistantText: (t) => appendItem({ kind: "assistant", content: t }),
@@ -725,11 +782,39 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onToolEnd: (status, result) => updateLastTool(status, result),
             approve: (name, args) =>
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
+            askUser: (question) =>
+              new Promise<string>((resolve) => setPendingQuestion({ question, resolve })),
             onUsage: addUsage,
             onFileEdit: recordFileEdit,
           },
-          { autoApprove, signal, workspaceRoot: workspaceRoot ?? undefined },
+          { autoApprove, signal, workspaceRoot: workspaceRoot ?? undefined, allowAskUser: true },
         );
+
+        // Lightweight self-check (principle 4) for plain agent mode: one review
+        // pass against the goal/constraints; only surfaced if it finds a fix.
+        if (selfCheck && finalAnswer && !signal.aborted) {
+          const reviewMsgs: ApiMessage[] = [
+            ...base,
+            { role: "assistant", content: finalAnswer },
+            {
+              role: "user",
+              content:
+                "Review your answer above against the user's goal and any stated constraints. " +
+                "If it is correct, complete and within constraints, reply with exactly `OK`. " +
+                "Otherwise reply with the corrected, complete answer (no preamble).",
+            },
+          ];
+          try {
+            const { content, usage } = await complete(reviewMsgs, model || undefined);
+            addUsage(usage);
+            const t = content.trim();
+            if (t.length > 8 && !/^OK\b/i.test(t)) {
+              appendItem({ kind: "assistant", content: `🔍 セルフチェックによる修正:\n\n${t}` });
+            }
+          } catch {
+            /* self-check is best-effort */
+          }
+        }
       } else {
         // Plain streaming chat (no tools).
         const msgs: ChatMessage[] = base.map((m) => ({
@@ -763,6 +848,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       setCalib(loadCalib());
       setBusy(false);
       setPending(null);
+      setPendingQuestion(null);
     }
   }
 
@@ -770,6 +856,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     abortRef.current.aborted = true;
     pending?.resolve(false);
     setPending(null);
+    pendingQuestion?.resolve("（停止しました）");
+    setPendingQuestion(null);
   }
 
   // Detect a trailing "@token" before the caret to drive the mention popup.
@@ -831,6 +919,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   function resolveApproval(ok: boolean) {
     pending?.resolve(ok);
     setPending(null);
+  }
+
+  function answerQuestion(answer: string) {
+    pendingQuestion?.resolve(answer);
+    setPendingQuestion(null);
   }
 
   return (
@@ -970,13 +1063,15 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             </div>
           );
         })}
-        {busy && !pending && <ThinkingIndicator />}
+        {busy && !pending && !pendingQuestion && <ThinkingIndicator />}
         {error && (
           <div className="rounded-md border border-red-800/50 bg-red-950/40 px-3 py-2 text-xs text-red-300">
             {error}
           </div>
         )}
       </div>
+
+      {pendingQuestion && <AskUserCard question={pendingQuestion.question} onAnswer={answerQuestion} />}
 
       {pending && (
         <div className="mx-3 mb-2 rounded-md border border-amber-600/60 bg-amber-950/30 p-3 text-xs">
@@ -1042,6 +1137,15 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               accent="bg-amber-500"
               label="自動承認"
               title="承認なしで書き込み・コマンドを実行します（注意）。"
+            />
+          )}
+          {agentMode && !deepReasoning && (
+            <Toggle
+              checked={selfCheck}
+              onChange={setSelfCheck}
+              accent="bg-sky-500"
+              label="セルフチェック"
+              title="回答前に、目的・制約に照らして自己点検し、必要なら修正します（1回の追加 API 呼び出し）。"
             />
           )}
           <Toggle

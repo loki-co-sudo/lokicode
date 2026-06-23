@@ -104,6 +104,9 @@ const BRIEF = (n: number) =>
       "CRITERIA: 3-6 bullets defining what a great answer MUST satisfy for THIS specific request " +
       "(audience fit, framing, required depth, format, grounding). Make them concrete and task-" +
       "specific — an answer can be technically correct yet still fail these.\n" +
+      "CONSTRAINTS: hard limits the solution must respect — actions/files that must NOT be touched, " +
+      "scope boundaries, irreversible operations to avoid, budget/time limits. Write 'none' if there " +
+      "are genuinely none. One per line prefixed with '- '.\n" +
       (n > 1
         ? `QUESTIONS: at most ${n} independent, decision-relevant investigation questions whose ` +
           'answers are jointly sufficient to meet the GOAL. One per line, prefixed with "Q: ".'
@@ -142,7 +145,8 @@ const JUDGE = usr(
   "You are a strict evaluator. Judge the candidate answer above against the user's task, the " +
     "stated GOAL/CRITERIA, and the gathered evidence. Score 0-100 with this rubric: " +
     "fit to GOAL & CRITERIA 35 (an answer that ignores the task-specific CRITERIA — e.g., wrong " +
-    "audience, framing, or format — is a major defect EVEN IF technically correct), " +
+    "audience, framing, or format — is a major defect EVEN IF technically correct; violating any " +
+    "stated CONSTRAINT is a CRITICAL defect), " +
     "factual grounding & correctness 35 (every concrete claim must be supported by the evidence; " +
     "any unsupported, evidence-contradicting, or internally inconsistent claim is a CRITICAL " +
     "defect that caps the score at 50), depth/insight appropriate to the audience 20, " +
@@ -169,7 +173,8 @@ const FINAL = (useTools: boolean) =>
       (useTools ? " (use read-only tools to confirm anything uncertain)" : "") +
       " and correct or remove anything unsupported, evidence-contradicting, or generic. " +
       "The answer MUST satisfy the stated GOAL and CRITERIA (intended audience, framing and " +
-      "format) — not merely be technically correct. Then deliver a decisive, specific response " +
+      "format) and respect every CONSTRAINT — not merely be technically correct. Then deliver a " +
+      "decisive, specific response " +
       "pitched at the right level: ground key claims with file:line evidence, state honest " +
       "uncertainties instead of blanket hedging, no filler or re-stating the question. Use " +
       "Markdown, code in fenced blocks. Reply in the user's language.",
@@ -196,18 +201,22 @@ function parseJudgment(text: string): { score: number; defects: string[] } {
 function parseBrief(
   text: string,
   maxQ: number,
-): { goal: string; criteria: string[]; questions: string[] } {
-  const goalM = text.match(/GOAL[:：]\s*([\s\S]*?)(?:\n\s*(?:CRITERIA|QUESTIONS|評価基準)\b|$)/i);
+): { goal: string; criteria: string[]; constraints: string[]; questions: string[] } {
+  const goalM = text.match(/GOAL[:：]\s*([\s\S]*?)(?:\n\s*(?:CRITERIA|CONSTRAINTS|QUESTIONS|評価基準)\b|$)/i);
   const goal = goalM ? goalM[1].trim().replace(/\s*\n+\s*/g, " ") : "";
-  const critM = text.match(/CRITERIA[:：]?\s*([\s\S]*?)(?:\n\s*QUESTIONS\b|$)/i);
-  const criteria = critM
-    ? critM[1]
-        .split(/\r?\n/)
-        .map((l) => l.replace(/^\s*[-*•\d.)]+\s*/, "").trim())
-        .filter((l) => l.length > 1)
-        .slice(0, 8)
+  const bullets = (section: string): string[] =>
+    section
+      .split(/\r?\n/)
+      .map((l) => l.replace(/^\s*[-*•\d.)]+\s*/, "").trim())
+      .filter((l) => l.length > 1)
+      .slice(0, 8);
+  const critM = text.match(/CRITERIA[:：]?\s*([\s\S]*?)(?:\n\s*(?:CONSTRAINTS|QUESTIONS)\b|$)/i);
+  const criteria = critM ? bullets(critM[1]) : [];
+  const consM = text.match(/CONSTRAINTS[:：]?\s*([\s\S]*?)(?:\n\s*QUESTIONS\b|$)/i);
+  const constraints = consM
+    ? bullets(consM[1]).filter((c) => !/^none\b|^なし$/i.test(c))
     : [];
-  return { goal, criteria, questions: parseQuestions(text, maxQ) };
+  return { goal, criteria, constraints, questions: parseQuestions(text, maxQ) };
 }
 
 function parseSufficiency(text: string): { sufficient: boolean; gaps: string[] } {
@@ -292,13 +301,17 @@ async function runOrchestratedReasoning(
   // The brief anchors every later phase: investigation, the verifier's rubric,
   // and the final answer are all held accountable to this GOAL/CRITERIA.
   const briefMsgs: ApiMessage[] =
-    brief.goal || brief.criteria.length
+    brief.goal || brief.criteria.length || brief.constraints.length
       ? [
           sys(
             "このタスクの設計（最終回答は必ずこれを満たすこと）:\n" +
               (brief.goal ? `GOAL: ${brief.goal}\n` : "") +
               (brief.criteria.length
-                ? "CRITERIA:\n" + brief.criteria.map((c) => `- ${c}`).join("\n")
+                ? "CRITERIA:\n" + brief.criteria.map((c) => `- ${c}`).join("\n") + "\n"
+                : "") +
+              (brief.constraints.length
+                ? "CONSTRAINTS（厳守。違反は不可）:\n" +
+                  brief.constraints.map((c) => `- ${c}`).join("\n")
                 : ""),
           ),
         ]
