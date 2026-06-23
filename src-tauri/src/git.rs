@@ -302,6 +302,50 @@ pub fn git_push(app: AppHandle, cwd: String) -> Result<String, String> {
     Err(if e.trim().is_empty() { o } else { e })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameLine {
+    pub line: usize,
+    pub short: String,
+    pub author: String,
+    pub summary: String,
+}
+
+/// Per-line blame for a file (via `git blame --line-porcelain`).
+#[tauri::command]
+pub fn git_blame(cwd: String, path: String) -> Result<Vec<BlameLine>, String> {
+    let (out, err, c) = run_git(&cwd, &["blame", "--line-porcelain", "--", &path])?;
+    if c != 0 {
+        return Err(err);
+    }
+    let mut lines = Vec::new();
+    let (mut short, mut author, mut summary) = (String::new(), String::new(), String::new());
+    let mut n = 0usize;
+    for line in out.lines() {
+        if let Some(code) = line.strip_prefix('\t') {
+            let _ = code;
+            n += 1;
+            lines.push(BlameLine {
+                line: n,
+                short: short.clone(),
+                author: author.clone(),
+                summary: summary.clone(),
+            });
+        } else if let Some(rest) = line.strip_prefix("author ") {
+            author = rest.to_string();
+        } else if let Some(rest) = line.strip_prefix("summary ") {
+            summary = rest.to_string();
+        } else {
+            // Possible "<40-hex> orig final [num]" header line.
+            let tok = line.split_whitespace().next().unwrap_or("");
+            if tok.len() >= 40 && tok.bytes().all(|b| b.is_ascii_hexdigit()) {
+                short = tok[..8].to_string();
+            }
+        }
+    }
+    Ok(lines)
+}
+
 /// Recent commit history of the repo (newest first).
 #[tauri::command]
 pub fn git_log(cwd: String, limit: u32) -> Result<Vec<GitCommit>, String> {

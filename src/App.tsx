@@ -8,6 +8,7 @@ import SettingsModal from "./components/SettingsModal";
 import ExplorerPane from "./components/ExplorerPane";
 import SourceControlPane from "./components/SourceControlPane";
 import GitDiffView, { type DiffTarget } from "./components/GitDiffView";
+import BlameView from "./components/BlameView";
 import UpdateBanner from "./components/UpdateBanner";
 import SearchPane from "./components/SearchPane";
 import TerminalPanel from "./components/TerminalPanel";
@@ -81,6 +82,7 @@ export default function App() {
   }, [sidebarView]);
 
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
+  const [blamePath, setBlamePath] = useState<string | null>(null);
   const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
   // Whether the right-hand AI Agent pane is shown (collapsible like the sidebar).
   const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
@@ -306,8 +308,15 @@ export default function App() {
       },
       { id: "settings", title: "設定を開く", run: () => setSettingsOpen(true) },
       { id: "check-update", title: "更新を確認", run: () => setUpdateCheckNonce((n) => n + 1) },
+      {
+        id: "git-blame",
+        title: "Git: 現在のファイルの blame",
+        run: () => {
+          if (activeTab.path) setBlamePath(activeTab.path);
+        },
+      },
     ],
-    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setAutoSave, setTheme],
+    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setAutoSave, setTheme, activeTab.path],
   );
 
   // Global shortcuts: save, palette/quick-open, and panel toggles.
@@ -505,7 +514,13 @@ export default function App() {
           onMouseLeave={stopDrag}
         >
           <div style={{ width: chatOpen ? `${editorPct}%` : "100%" }} className="min-w-0">
-            {diffTarget && workspaceRoot ? (
+            {blamePath ? (
+              <BlameView
+                cwd={workspaceRoot ?? blamePath.replace(/[\\/][^\\/]+$/, "")}
+                path={blamePath}
+                onClose={() => setBlamePath(null)}
+              />
+            ) : diffTarget && workspaceRoot ? (
               <GitDiffView
                 root={workspaceRoot}
                 target={diffTarget}

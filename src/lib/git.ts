@@ -78,3 +78,14 @@ export function gitPush(cwd: string): Promise<string> {
 export function gitLog(cwd: string, limit = 30): Promise<GitCommit[]> {
   return invoke<GitCommit[]>("git_log", { cwd, limit });
 }
+
+export interface GitBlameLine {
+  line: number;
+  short: string;
+  author: string;
+  summary: string;
+}
+
+export function gitBlame(cwd: string, path: string): Promise<GitBlameLine[]> {
+  return invoke<GitBlameLine[]>("git_blame", { cwd, path });
+}
