@@ -175,6 +175,7 @@ pub fn run() {
             git::git_push,
             git::git_log,
             git::git_blame,
+            git::git_remote_url,
             github::github_device_start,
             github::github_device_poll,
             github::github_user,

@@ -89,3 +89,7 @@ export interface GitBlameLine {
 export function gitBlame(cwd: string, path: string): Promise<GitBlameLine[]> {
   return invoke<GitBlameLine[]>("git_blame", { cwd, path });
 }
+
+export function gitRemoteUrl(cwd: string): Promise<string> {
+  return invoke<string>("git_remote_url", { cwd });
+}

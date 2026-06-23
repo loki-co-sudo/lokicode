@@ -11,12 +11,20 @@ import {
   gitPull,
   gitPush,
   gitLog,
+  gitRemoteUrl,
   type GitStatus,
   type GitFile,
   type GitCommit,
 } from "../lib/git";
 import { githubUser, type GithubUser } from "../lib/github";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { fileNameFromPath } from "../lib/files";
+
+/** Parse owner/repo from a GitHub remote URL (https or ssh form). */
+function parseGithub(url: string): { owner: string; repo: string } | null {
+  const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?\/?$/);
+  return m ? { owner: m[1], repo: m[2] } : null;
+}
 import type { DiffTarget } from "./GitDiffView";
 import CommitGraph from "./CommitGraph";
 
@@ -59,6 +67,7 @@ export default function SourceControlPane({ root, active, onOpenDiff }: SourceCo
   const [user, setUser] = useState<GithubUser | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [commits, setCommits] = useState<GitCommit[] | null>(null);
+  const [remoteUrl, setRemoteUrl] = useState("");
 
   const reload = useCallback(async () => {
     try {
@@ -72,7 +81,8 @@ export default function SourceControlPane({ root, active, onOpenDiff }: SourceCo
   useEffect(() => {
     reload();
     githubUser().then(setUser).catch(() => setUser(null));
-  }, [reload]);
+    gitRemoteUrl(root).then(setRemoteUrl).catch(() => setRemoteUrl(""));
+  }, [reload, root]);
 
   // Refresh in the background whenever the pane becomes visible. Existing data
   // stays on screen during the fetch, so there is no "読み込み中…" flicker.
@@ -174,6 +184,7 @@ export default function SourceControlPane({ root, active, onOpenDiff }: SourceCo
   const unstaged = files.filter((f) => !f.staged && !f.untracked);
   const untracked = files.filter((f) => f.untracked);
   const branch = status?.branch ?? "";
+  const gh = parseGithub(remoteUrl);
 
   function Row({ f, action }: { f: GitFile; action: "stage" | "unstage" }) {
     const letter = f.untracked ? "?" : f.staged ? f.index : f.worktree;
@@ -275,6 +286,33 @@ export default function SourceControlPane({ root, active, onOpenDiff }: SourceCo
           </div>
         )}
       </div>
+
+      {gh && (
+        <div className="flex items-center gap-1 border-b border-neutral-800 px-2 py-1 text-[11px]">
+          <button
+            onClick={() => openUrl(`https://github.com/${gh.owner}/${gh.repo}/compare/${encodeURIComponent(branch)}?expand=1`)}
+            disabled={!branch}
+            title="現在のブランチでプルリクエストを作成（ブラウザ）"
+            className="rounded bg-neutral-700 px-2 py-0.5 text-neutral-100 hover:bg-neutral-600 disabled:opacity-40"
+          >
+            PR 作成
+          </button>
+          <button
+            onClick={() => openUrl(`https://github.com/${gh.owner}/${gh.repo}/issues/new`)}
+            title="Issue を作成（ブラウザ）"
+            className="rounded px-2 py-0.5 text-neutral-300 hover:bg-neutral-700"
+          >
+            Issue 作成
+          </button>
+          <button
+            onClick={() => openUrl(`https://github.com/${gh.owner}/${gh.repo}`)}
+            title="GitHub でリポジトリを開く"
+            className="ml-auto rounded px-2 py-0.5 text-neutral-400 hover:bg-neutral-700"
+          >
+            GitHub ↗
+          </button>
+        </div>
+      )}
 
       <div className="border-b border-neutral-800 p-2">
         <textarea

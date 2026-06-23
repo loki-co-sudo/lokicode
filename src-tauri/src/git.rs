@@ -184,6 +184,16 @@ pub fn git_commit(cwd: String, message: String) -> Result<String, String> {
     Ok(o.trim().to_string())
 }
 
+/// The `origin` remote URL (empty string if none).
+#[tauri::command]
+pub fn git_remote_url(cwd: String) -> Result<String, String> {
+    let (out, _e, c) = run_git(&cwd, &["config", "--get", "remote.origin.url"])?;
+    if c != 0 {
+        return Ok(String::new());
+    }
+    Ok(out.trim().to_string())
+}
+
 #[tauri::command]
 pub fn git_init(cwd: String) -> Result<(), String> {
     let (_o, e, c) = run_git(&cwd, &["init"])?;

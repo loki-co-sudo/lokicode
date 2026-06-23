@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { editor as MonacoEditor } from "monaco-editor";
 import { usePersistentBool, usePersistentString } from "./lib/usePersistentState";
 import EditorPane from "./components/EditorPane";
 import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
@@ -111,6 +112,7 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const chatRef = useRef<ChatPaneHandle>(null);
+  const editorInstanceRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
 
@@ -313,6 +315,15 @@ export default function App() {
         title: "Git: 現在のファイルの blame",
         run: () => {
           if (activeTab.path) setBlamePath(activeTab.path);
+        },
+      },
+      {
+        id: "outline",
+        title: "アウトライン / シンボル検索",
+        hint: "Ctrl+Shift+O",
+        run: () => {
+          editorInstanceRef.current?.focus();
+          editorInstanceRef.current?.getAction("editor.action.quickOutline")?.run();
         },
       },
     ],
@@ -541,6 +552,7 @@ export default function App() {
                 onQuickAction={handleQuickAction}
                 onReorderTab={reorderTabs}
                 onTogglePin={togglePinTab}
+                onEditorReady={(ed) => (editorInstanceRef.current = ed)}
                 theme={theme === "light" ? "light" : "dark"}
               />
             )}

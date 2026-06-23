@@ -15,6 +15,7 @@ interface EditorPaneProps {
   onQuickAction: (action: QuickAction, code: string, language: string) => void;
   onReorderTab: (fromId: string, toId: string) => void;
   onTogglePin: (id: string) => void;
+  onEditorReady: (editor: MonacoEditor.IStandaloneCodeEditor) => void;
   theme: "dark" | "light";
 }
 
@@ -28,6 +29,7 @@ export default function EditorPane({
   onQuickAction,
   onReorderTab,
   onTogglePin,
+  onEditorReady,
   theme,
 }: EditorPaneProps) {
   const dragIdRef = useRef<string | null>(null);
@@ -135,6 +137,7 @@ export default function EditorPane({
           language={activeTab.language}
           value={activeTab.content}
           onMount={(ed) => {
+            onEditorReady(ed);
             const items: { id: string; label: string; action: QuickAction; order: number }[] = [
               { id: "loki.explain", label: "lokicode: 選択範囲を説明", action: "explain", order: 1.5 },
               { id: "loki.refactor", label: "lokicode: リファクタリング", action: "refactor", order: 1.6 },
