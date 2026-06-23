@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePersistentBool, usePersistentString } from "./lib/usePersistentState";
 import EditorPane from "./components/EditorPane";
 import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
@@ -84,6 +85,8 @@ export default function App() {
   const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
   // Bottom integrated terminal panel.
   const [terminalOpen, setTerminalOpen] = usePersistentBool("lokicode.terminalOpen", false);
+  // Auto-save: debounced write of the active tab after edits.
+  const [autoSave, setAutoSave] = usePersistentBool("lokicode.autoSave", false);
   // Remember the last non-null sidebar view so Ctrl+B can reopen it.
   const lastSidebarRef = useRef<Exclude<SidebarView, null>>("explorer");
   useEffect(() => {
@@ -260,6 +263,7 @@ export default function App() {
       { id: "view-git", title: "ソース管理を表示", run: () => setSidebarView("git") },
       { id: "toggle-chat", title: "AI エージェントの表示切替", hint: "Ctrl+Alt+B", run: () => setChatOpen((v) => !v) },
       { id: "toggle-terminal", title: "ターミナルの表示切替", hint: "Ctrl+J", run: () => setTerminalOpen((v) => !v) },
+      { id: "toggle-autosave", title: "自動保存の切替", run: () => setAutoSave((v) => !v) },
       {
         id: "toggle-theme",
         title: "テーマ切替（ライト / ダーク）",
@@ -268,7 +272,7 @@ export default function App() {
       { id: "settings", title: "設定を開く", run: () => setSettingsOpen(true) },
       { id: "check-update", title: "更新を確認", run: () => setUpdateCheckNonce((n) => n + 1) },
     ],
-    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setTheme],
+    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setAutoSave, setTheme],
   );
 
   // Global shortcuts: save, palette/quick-open, and panel toggles.
@@ -317,6 +321,33 @@ export default function App() {
     dragging.current = false;
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
+  }, []);
+
+  // Auto-save: write the active tab a short delay after the last edit.
+  useEffect(() => {
+    if (!autoSave || !activeTab.path || !activeTab.dirty) return;
+    const id = window.setTimeout(() => {
+      writeFile(activeTab.path!, activeTab.content)
+        .then(() => updateTab(activeTab.id, { dirty: false }))
+        .catch(() => {});
+    }, 800);
+    return () => window.clearTimeout(id);
+  }, [autoSave, activeTab.path, activeTab.content, activeTab.dirty, activeTab.id, updateTab]);
+
+  // Open files dragged onto the window.
+  const openPathRef = useRef(openPath);
+  openPathRef.current = openPath;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWebview()
+      .onDragDropEvent((e) => {
+        if (e.payload.type === "drop") {
+          for (const p of e.payload.paths) openPathRef.current(p);
+        }
+      })
+      .then((u) => (unlisten = u))
+      .catch(() => {});
+    return () => unlisten?.();
   }, []);
 
   return (

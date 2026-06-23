@@ -20,6 +20,8 @@ import {
   type ToolStatus,
   type Todo,
 } from "../lib/agent";
+import { invoke } from "@tauri-apps/api/core";
+import { joinPath } from "../lib/files";
 import { runRecurrentReasoning, MAX_DEPTH, MAX_SAMPLES } from "../lib/reasoning";
 import { useModels } from "../lib/useModels";
 import {
@@ -58,6 +60,7 @@ function buildSystemPrompt(
   fileName: string,
   filePath: string | null,
   workspaceRoot: string | null,
+  rules: string,
 ): ApiMessage {
   return {
     role: "system",
@@ -71,7 +74,11 @@ Guidelines:
 - write_file and run_command require the user's approval; if a call is denied, propose an alternative.
 - Be concise. Reply in the user's language (Japanese if they write Japanese) and use Markdown.
 ${workspaceRoot ? `The open workspace folder is: ${workspaceRoot} (use it as the base for relative work and as the cwd for run_command).` : ""}
-${filePath ? `The user's active file is: ${filePath}` : `The active editor tab is unsaved (named "${fileName}").`}`,
+${filePath ? `The user's active file is: ${filePath}` : `The active editor tab is unsaved (named "${fileName}").`}${
+      rules.trim()
+        ? `\n\nProject-specific instructions (from .lokicode/rules) — follow these:\n${rules.trim()}`
+        : ""
+    }`,
   };
 }
 
@@ -233,6 +240,35 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const { models } = useModels();
   // Calibration learned from real usage; refreshed after each run.
   const [calib, setCalib] = useState(() => loadCalib());
+
+  // Project-specific instructions loaded from <root>/.lokicode/rules(.md).
+  const [rulesText, setRulesText] = useState("");
+  useEffect(() => {
+    if (!workspaceRoot) {
+      setRulesText("");
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      for (const rel of [".lokicode/rules", ".lokicode/rules.md"]) {
+        try {
+          const txt = await invoke<string>("read_text_file", {
+            path: joinPath(workspaceRoot, rel),
+          });
+          if (!cancelled) {
+            setRulesText(txt);
+            return;
+          }
+        } catch {
+          /* try next candidate */
+        }
+      }
+      if (!cancelled) setRulesText("");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceRoot]);
   const callCountRef = useRef(0);
 
   // Approximate input tokens of the base prompt that will be sent (system +
@@ -397,7 +433,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     const signal = abortRef.current;
 
     const base: ApiMessage[] = [
-      buildSystemPrompt(currentFileName, currentFilePath, workspaceRoot),
+      buildSystemPrompt(currentFileName, currentFilePath, workspaceRoot, rulesText),
     ];
     if (includeFile && currentCode.trim()) {
       base.push({

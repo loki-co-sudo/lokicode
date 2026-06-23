@@ -1,5 +1,19 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listDir, joinPath, fileNameFromPath, type DirEntry } from "../lib/files";
+import { gitStatus } from "../lib/git";
+
+/** Git status letter → text color (matches the Source Control pane). */
+function gitColor(letter: string): string {
+  if (letter === "D") return "text-red-400";
+  if (letter === "A" || letter === "?") return "text-emerald-400";
+  if (letter === "R") return "text-blue-400";
+  return "text-amber-400";
+}
+
+/** Repo-relative, forward-slash path of an absolute path under `root`. */
+function relPath(abs: string, root: string): string {
+  return abs.slice(root.length).replace(/^[\\/]+/, "").replace(/\\/g, "/");
+}
 
 function Chevron({ open }: { open: boolean }) {
   return (
@@ -51,11 +65,13 @@ interface TreeNodeProps {
   name: string;
   isDir: boolean;
   depth: number;
+  root: string;
   activePath: string | null;
+  gitMap: Map<string, string>;
   onOpenFile: (path: string) => void;
 }
 
-function TreeNode({ path, name, isDir, depth, activePath, onOpenFile }: TreeNodeProps) {
+function TreeNode({ path, name, isDir, depth, root, activePath, gitMap, onOpenFile }: TreeNodeProps) {
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<DirEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,6 +95,7 @@ function TreeNode({ path, name, isDir, depth, activePath, onOpenFile }: TreeNode
   }
 
   const active = !isDir && activePath === path;
+  const letter = isDir ? "" : gitMap.get(relPath(path, root)) ?? "";
 
   return (
     <div>
@@ -99,7 +116,8 @@ function TreeNode({ path, name, isDir, depth, activePath, onOpenFile }: TreeNode
         <span className="flex shrink-0 items-center">
           {isDir ? <FolderIcon open={open} /> : <FileIcon name={name} />}
         </span>
-        <span className="truncate">{name}</span>
+        <span className={"truncate " + (letter ? gitColor(letter) : "")}>{name}</span>
+        {letter && <span className={"ml-auto pl-1 font-mono text-[11px] " + gitColor(letter)}>{letter}</span>}
       </div>
       {isDir && open && (
         <div>
@@ -115,7 +133,9 @@ function TreeNode({ path, name, isDir, depth, activePath, onOpenFile }: TreeNode
               name={c.name}
               isDir={c.isDir}
               depth={depth + 1}
+              root={root}
               activePath={activePath}
+              gitMap={gitMap}
               onOpenFile={onOpenFile}
             />
           ))}
@@ -141,6 +161,7 @@ export default function ExplorerPane({
   onClose,
 }: ExplorerPaneProps) {
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
+  const [gitMap, setGitMap] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -152,6 +173,24 @@ export default function ExplorerPane({
     };
   }, [root]);
 
+  // Load git status to color changed files. Refreshes when the active file
+  // changes (e.g. after a save) and on the refresh button.
+  const reloadGit = useCallback(() => {
+    gitStatus(root)
+      .then((s) => {
+        const m = new Map<string, string>();
+        for (const f of s.files) {
+          m.set(f.path, f.untracked ? "?" : (f.worktree !== " " ? f.worktree : f.index) || "M");
+        }
+        setGitMap(m);
+      })
+      .catch(() => setGitMap(new Map()));
+  }, [root]);
+
+  useEffect(() => {
+    reloadGit();
+  }, [reloadGit, activePath]);
+
   return (
     <div className="flex h-full flex-col bg-[#1b1b1c]">
       <div className="flex items-center justify-between border-b border-neutral-800 bg-[#252526] px-2 py-2">
@@ -159,6 +198,12 @@ export default function ExplorerPane({
           {fileNameFromPath(root) || root}
         </span>
         <span className="flex items-center gap-1">
+          <button onClick={reloadGit} title="Git 状態を更新" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+              <path d="M21 3v5h-5" />
+            </svg>
+          </button>
           <button onClick={onOpenFolder} title="別のフォルダを開く" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 7h6l2 2h10v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
@@ -181,7 +226,9 @@ export default function ExplorerPane({
             name={e.name}
             isDir={e.isDir}
             depth={0}
+            root={root}
             activePath={activePath}
+            gitMap={gitMap}
             onOpenFile={onOpenFile}
           />
         ))}
