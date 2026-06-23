@@ -4,6 +4,8 @@ import EditorPane from "./components/EditorPane";
 import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
 import SettingsModal from "./components/SettingsModal";
 import ExplorerPane from "./components/ExplorerPane";
+import SourceControlPane from "./components/SourceControlPane";
+import ActivityBar, { type SidebarView } from "./components/ActivityBar";
 import {
   openFile,
   openFolder,
@@ -56,7 +58,7 @@ export default function App() {
   const [settingsVersion, setSettingsVersion] = useState(0);
 
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
-  const [showSidebar, setShowSidebar] = useState(false);
+  const [sidebarView, setSidebarView] = useState<SidebarView>(null);
 
   const [editorPct, setEditorPct] = useState(62);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -130,7 +132,11 @@ export default function App() {
     const dir = await openFolder();
     if (!dir) return;
     setWorkspaceRoot(dir);
-    setShowSidebar(true);
+    setSidebarView("explorer");
+  }, []);
+
+  const handleActivitySelect = useCallback((view: Exclude<SidebarView, null>) => {
+    setSidebarView((cur) => (cur === view ? null : view));
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -215,32 +221,36 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-[#1e1e1e] text-neutral-200">
       <header className="flex items-center gap-2 border-b border-neutral-800 bg-[#323233] px-3 py-2">
-        <button
-          onClick={() => (workspaceRoot ? setShowSidebar((s) => !s) : handleOpenFolder())}
-          title={workspaceRoot ? "エクスプローラの表示切替" : "フォルダを開く"}
-          className={
-            "rounded p-1 hover:bg-neutral-700 " +
-            (showSidebar ? "text-blue-400" : "text-neutral-400 hover:text-neutral-200")
-          }
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 7h6l2 2h10v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
-          </svg>
-        </button>
         <span className="text-sm font-semibold tracking-wide text-neutral-100">lokicode</span>
         <span className="text-xs text-neutral-500">— VS Code-style editor with AI agent</span>
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {showSidebar && workspaceRoot && (
-          <aside className="w-56 shrink-0 border-r border-neutral-800">
-            <ExplorerPane
-              root={workspaceRoot}
-              activePath={activeTab.path}
-              onOpenFile={openPath}
-              onOpenFolder={handleOpenFolder}
-              onClose={() => setShowSidebar(false)}
-            />
+        <ActivityBar view={sidebarView} onSelect={handleActivitySelect} />
+
+        {sidebarView && (
+          <aside className="w-60 shrink-0 border-r border-neutral-800">
+            {!workspaceRoot ? (
+              <div className="flex h-full flex-col items-start gap-3 bg-[#1b1b1c] p-3 text-xs text-neutral-400">
+                <p>フォルダを開くと、ここにファイルや Git の状態が表示されます。</p>
+                <button
+                  onClick={handleOpenFolder}
+                  className="rounded bg-blue-600 px-3 py-1 text-white hover:bg-blue-500"
+                >
+                  フォルダを開く
+                </button>
+              </div>
+            ) : sidebarView === "explorer" ? (
+              <ExplorerPane
+                root={workspaceRoot}
+                activePath={activeTab.path}
+                onOpenFile={openPath}
+                onOpenFolder={handleOpenFolder}
+                onClose={() => setSidebarView(null)}
+              />
+            ) : (
+              <SourceControlPane root={workspaceRoot} onOpenFile={openPath} />
+            )}
           </aside>
         )}
 

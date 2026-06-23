@@ -1,3 +1,4 @@
+mod git;
 mod openrouter;
 
 use serde::Serialize;
@@ -140,6 +141,11 @@ pub fn run() {
             openrouter::list_models,
             openrouter::get_settings,
             openrouter::save_settings,
+            git::git_status,
+            git::git_stage,
+            git::git_unstage,
+            git::git_commit,
+            git::git_init,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
