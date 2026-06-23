@@ -5,6 +5,8 @@ import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
 import SettingsModal from "./components/SettingsModal";
 import ExplorerPane from "./components/ExplorerPane";
 import SourceControlPane from "./components/SourceControlPane";
+import GitDiffView, { type DiffTarget } from "./components/GitDiffView";
+import UpdateBanner from "./components/UpdateBanner";
 import ActivityBar, { type SidebarView } from "./components/ActivityBar";
 import {
   openFile,
@@ -59,6 +61,8 @@ export default function App() {
 
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [sidebarView, setSidebarView] = useState<SidebarView>(null);
+  const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
+  const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
 
   const [editorPct, setEditorPct] = useState(62);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -223,7 +227,16 @@ export default function App() {
       <header className="flex items-center gap-2 border-b border-neutral-800 bg-[#323233] px-3 py-2">
         <span className="text-sm font-semibold tracking-wide text-neutral-100">lokicode</span>
         <span className="text-xs text-neutral-500">— VS Code-style editor with AI agent</span>
+        <button
+          onClick={() => setUpdateCheckNonce((n) => n + 1)}
+          className="ml-auto rounded px-2 py-0.5 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
+          title="更新を確認"
+        >
+          更新を確認
+        </button>
       </header>
+
+      <UpdateBanner manualNonce={updateCheckNonce} />
 
       <div className="flex min-h-0 flex-1">
         <ActivityBar view={sidebarView} onSelect={handleActivitySelect} />
@@ -249,7 +262,7 @@ export default function App() {
                 onClose={() => setSidebarView(null)}
               />
             ) : (
-              <SourceControlPane root={workspaceRoot} onOpenFile={openPath} />
+              <SourceControlPane root={workspaceRoot} onOpenDiff={setDiffTarget} />
             )}
           </aside>
         )}
@@ -262,17 +275,29 @@ export default function App() {
           onMouseLeave={stopDrag}
         >
           <div style={{ width: `${editorPct}%` }} className="min-w-0">
-            <EditorPane
-              tabs={tabs}
-              activeTab={activeTab}
-              onSelectTab={setActiveId}
-              onCloseTab={handleCloseTab}
-              onNewTab={handleNewTab}
-              onChange={handleChange}
-              onOpen={handleOpen}
-              onSave={handleSave}
-              onSendSelection={handleSendSelection}
-            />
+            {diffTarget && workspaceRoot ? (
+              <GitDiffView
+                root={workspaceRoot}
+                target={diffTarget}
+                onOpenFile={(path) => {
+                  setDiffTarget(null);
+                  openPath(path);
+                }}
+                onClose={() => setDiffTarget(null)}
+              />
+            ) : (
+              <EditorPane
+                tabs={tabs}
+                activeTab={activeTab}
+                onSelectTab={setActiveId}
+                onCloseTab={handleCloseTab}
+                onNewTab={handleNewTab}
+                onChange={handleChange}
+                onOpen={handleOpen}
+                onSave={handleSave}
+                onSendSelection={handleSendSelection}
+              />
+            )}
           </div>
 
           <div

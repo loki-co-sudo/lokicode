@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSettings, saveSettings, type SettingsStatus } from "../lib/openrouter";
 import ModelPicker from "./ModelPicker";
+import GithubAccount from "./GithubAccount";
 
 interface SettingsModalProps {
   open: boolean;
@@ -103,6 +104,10 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
             onChange={setSynthesisModel}
             listId="settings-synthesis-models"
           />
+        </div>
+
+        <div className="mb-4">
+          <GithubAccount />
         </div>
 
         <div className="flex justify-end gap-2">
