@@ -29,13 +29,25 @@ export interface ApiMessage {
   tool_call_id?: string;
 }
 
+export interface Usage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cost: number;
+}
+
+export interface ChatOnceResult {
+  message: ApiMessage;
+  usage: Usage;
+}
+
 /** One non-streaming completion with tool-calling support (optional model override). */
 export function chatOnce(
   messages: ApiMessage[],
   tools: unknown[],
   model?: string,
-): Promise<ApiMessage> {
-  return invoke<ApiMessage>("chat_once", { messages, tools, model: model ?? null });
+): Promise<ChatOnceResult> {
+  return invoke<ChatOnceResult>("chat_once", { messages, tools, model: model ?? null });
 }
 
 export interface SettingsStatus {
@@ -89,9 +101,14 @@ export function saveSettings(opts: {
   });
 }
 
+export interface CompleteResult {
+  content: string;
+  usage: Usage;
+}
+
 /** Plain completion with an explicit model (used by the reasoning core). */
-export function complete(messages: ApiMessage[], model?: string): Promise<string> {
-  return invoke<string>("complete", { messages, model: model ?? null });
+export function complete(messages: ApiMessage[], model?: string): Promise<CompleteResult> {
+  return invoke<CompleteResult>("complete", { messages, model: model ?? null });
 }
 
 /**

@@ -27,6 +27,26 @@ pub enum StreamEvent {
     Error { message: String },
 }
 
+/// Token + cost usage returned by OpenRouter (cost requires `usage.include`).
+#[derive(Serialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub cost: f64,
+}
+
+fn extract_usage(json: &serde_json::Value) -> Usage {
+    let u = &json["usage"];
+    Usage {
+        prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0),
+        completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0),
+        total_tokens: u["total_tokens"].as_u64().unwrap_or(0),
+        cost: u["cost"].as_f64().unwrap_or(0.0),
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct Settings {
     api_key: Option<String>,
@@ -181,7 +201,7 @@ pub async fn complete(
     app: AppHandle,
     messages: serde_json::Value,
     model: Option<String>,
-) -> Result<String, String> {
+) -> Result<CompleteResult, String> {
     let Some(key) = resolve_key(&app) else {
         return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
     };
@@ -189,7 +209,11 @@ pub async fn complete(
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| resolve_model(&app));
 
-    let body = serde_json::json!({ "model": model, "messages": messages });
+    let body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "usage": { "include": true },
+    });
 
     let client = reqwest::Client::new();
     let resp = client
@@ -208,10 +232,19 @@ pub async fn complete(
         let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
         return Err(format!("OpenRouter エラー (HTTP {status}): {detail}"));
     }
-    Ok(json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string())
+    Ok(CompleteResult {
+        content: json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        usage: extract_usage(&json),
+    })
+}
+
+#[derive(Serialize)]
+pub struct CompleteResult {
+    content: String,
+    usage: Usage,
 }
 
 /// One non-streaming completion that supports tool calling. Returns the raw
@@ -223,7 +256,7 @@ pub async fn chat_once(
     messages: serde_json::Value,
     tools: serde_json::Value,
     model: Option<String>,
-) -> Result<serde_json::Value, String> {
+) -> Result<ChatOnceResult, String> {
     let Some(key) = resolve_key(&app) else {
         return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
     };
@@ -234,6 +267,7 @@ pub async fn chat_once(
     let mut body = serde_json::json!({
         "model": model,
         "messages": messages,
+        "usage": { "include": true },
     });
     if tools.as_array().is_some_and(|a| !a.is_empty()) {
         body["tools"] = tools;
@@ -257,7 +291,16 @@ pub async fn chat_once(
         let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
         return Err(format!("OpenRouter エラー (HTTP {status}): {detail}"));
     }
-    Ok(json["choices"][0]["message"].clone())
+    Ok(ChatOnceResult {
+        message: json["choices"][0]["message"].clone(),
+        usage: extract_usage(&json),
+    })
+}
+
+#[derive(Serialize)]
+pub struct ChatOnceResult {
+    message: serde_json::Value,
+    usage: Usage,
 }
 
 #[tauri::command]

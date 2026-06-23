@@ -11,7 +11,7 @@
 //
 // See /specs/architecture.md.
 
-import { complete, type ApiMessage } from "./openrouter";
+import { complete, type ApiMessage, type Usage } from "./openrouter";
 import { runAgent, type ToolStatus } from "./agent";
 
 export interface ReasoningCallbacks {
@@ -23,6 +23,7 @@ export interface ReasoningCallbacks {
   onToolStart: (call: { name: string; args: Record<string, unknown> }) => void;
   onToolEnd: (status: ToolStatus, result: string) => void;
   approve: (name: string, args: Record<string, unknown>) => Promise<boolean>;
+  onUsage?: (usage: Usage) => void;
 }
 
 export interface ReasoningOptions {
@@ -70,18 +71,21 @@ export async function runRecurrentReasoning(
           onToolStart: cb.onToolStart,
           onToolEnd: cb.onToolEnd,
           approve: cb.approve,
+          onUsage: cb.onUsage,
         },
         { autoApprove: opts.autoApprove, model, signal: opts.signal },
       );
     }
-    return complete(messages, model);
+    const { content, usage } = await complete(messages, model);
+    cb.onUsage?.(usage);
+    return content;
   };
 
   // Phase 0 — draft (thinking model).
   let draft = await think([...base, DRAFT_NUDGE], thinking);
   cb.onThought("初期ドラフト", thinkingLabel, draft);
 
-  // Phase 1..D — reflect & refine (thinking model).
+  // Phase 1..D — reflect & refine (thinking model), with convergence early-stop.
   for (let k = 1; k <= depth; k++) {
     if (opts.signal?.aborted) return;
     const reflectMessages: ApiMessage[] = [
@@ -91,10 +95,21 @@ export async function runRecurrentReasoning(
         role: "user",
         content:
           "上記の解を批判的に検証し、誤り・不足・改善点を具体的に指摘した上で、改善した完全な解を提示してください。" +
-          (opts.useTools ? "必要ならツールでファイルを読んだりコマンドを実行して事実確認してください。" : ""),
+          (opts.useTools ? "必要ならツールでファイルを読んだりコマンドを実行して事実確認してください。" : "") +
+          "\nもし既に正しく完全で実質的な改善が不要なら、出力の先頭行に `CONVERGED` とだけ書いてください。",
       },
     ];
-    draft = await think(reflectMessages, thinking);
+    const reflected = await think(reflectMessages, thinking);
+
+    // Early stop: the model signalled convergence — avoid wasting further API calls.
+    if (/^\s*CONVERGED\b/i.test(reflected)) {
+      const stripped = reflected.replace(/^\s*CONVERGED\b[ \t]*\n?/i, "").trim();
+      if (stripped.length > 40) draft = stripped;
+      cb.onThought(`収束（早期終了 ${k}/${depth}）`, thinkingLabel, draft);
+      break;
+    }
+
+    draft = reflected;
     cb.onThought(`内省 ${k}/${depth}`, thinkingLabel, draft);
   }
 

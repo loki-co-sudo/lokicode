@@ -11,6 +11,7 @@ import {
   saveSettings,
   type ApiMessage,
   type ChatMessage,
+  type Usage,
 } from "../lib/openrouter";
 import {
   runAgent,
@@ -159,6 +160,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     return v >= 1 && v <= MAX_DEPTH ? v : 4;
   });
   const [pending, setPending] = useState<PendingApproval | null>(null);
+  const [usage, setUsage] = useState({ tokens: 0, cost: 0 });
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
@@ -219,10 +221,15 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     }
   }
 
+  function addUsage(u: Usage) {
+    setUsage((prev) => ({ tokens: prev.tokens + u.totalTokens, cost: prev.cost + u.cost }));
+  }
+
   function handleClear() {
     setItems([]);
     clearItems();
     setError(null);
+    setUsage({ tokens: 0, cost: 0 });
   }
 
   async function handleSend() {
@@ -267,6 +274,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onToolEnd: (status, result) => updateLastTool(status, result),
             approve: (name, args) =>
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
+            onUsage: addUsage,
           },
         );
       } else if (agentMode) {
@@ -279,6 +287,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onToolEnd: (status, result) => updateLastTool(status, result),
             approve: (name, args) =>
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
+            onUsage: addUsage,
           },
           { autoApprove, signal },
         );
@@ -344,6 +353,13 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           </svg>
         </button>
       </div>
+
+      {usage.tokens > 0 && (
+        <div className="flex justify-end gap-2 border-b border-neutral-800 bg-[#1f1f20] px-3 py-1 text-[11px] text-neutral-500">
+          <span>セッション使用量: {usage.tokens.toLocaleString()} tokens</span>
+          {usage.cost > 0 && <span>· ${usage.cost.toFixed(4)}</span>}
+        </div>
+      )}
 
       {!hasKey && (
         <div className="m-3 rounded-md border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">

@@ -2,7 +2,7 @@
 // commands) to actually operate on the machine, not just answer questions.
 
 import { invoke } from "@tauri-apps/api/core";
-import { chatOnce, type ApiMessage } from "./openrouter";
+import { chatOnce, type ApiMessage, type Usage } from "./openrouter";
 
 export type ToolStatus = "running" | "done" | "error" | "denied";
 
@@ -128,6 +128,8 @@ export interface AgentCallbacks {
   onToolEnd: (status: ToolStatus, result: string) => void;
   /** Ask the user to approve a risky tool call. */
   approve: (name: string, args: Record<string, unknown>) => Promise<boolean>;
+  /** Reports token/cost usage for each underlying API call. */
+  onUsage?: (usage: Usage) => void;
 }
 
 export interface AgentOptions {
@@ -153,7 +155,8 @@ export async function runAgent(
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     if (opts.signal?.aborted) return finalText;
 
-    const assistant = await chatOnce(conv, TOOLS, opts.model);
+    const { message: assistant, usage } = await chatOnce(conv, TOOLS, opts.model);
+    cb.onUsage?.(usage);
     conv.push(assistant);
 
     if (assistant.content) {
