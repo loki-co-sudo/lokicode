@@ -82,6 +82,12 @@ export default function App() {
   // Whether the right-hand AI Agent pane is shown (collapsible like the sidebar).
   const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
 
+  // Color theme (dark default). Applied as the `light` class on <html>.
+  const [theme, setTheme] = usePersistentString("lokicode.theme", "dark");
+  useEffect(() => {
+    document.documentElement.classList.toggle("light", theme === "light");
+  }, [theme]);
+
   // Command palette (Ctrl+Shift+P) and quick file open (Ctrl+P).
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<"command" | "file">("command");
@@ -254,10 +260,15 @@ export default function App() {
       { id: "view-search", title: "検索 / 置換を表示", run: () => setSidebarView("search") },
       { id: "view-git", title: "ソース管理を表示", run: () => setSidebarView("git") },
       { id: "toggle-chat", title: "AI エージェントの表示切替", run: () => setChatOpen((v) => !v) },
+      {
+        id: "toggle-theme",
+        title: "テーマ切替（ライト / ダーク）",
+        run: () => setTheme((t) => (t === "light" ? "dark" : "light")),
+      },
       { id: "settings", title: "設定を開く", run: () => setSettingsOpen(true) },
       { id: "check-update", title: "更新を確認", run: () => setUpdateCheckNonce((n) => n + 1) },
     ],
-    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen],
+    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTheme],
   );
 
   // Ctrl/Cmd+S to save; Ctrl+Shift+P command palette; Ctrl+P quick open.
@@ -309,6 +320,22 @@ export default function App() {
           title="更新を確認"
         >
           更新を確認
+        </button>
+        <button
+          onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+          title="テーマ切替（ライト / ダーク）"
+          className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
+        >
+          {theme === "light" ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+            </svg>
+          )}
         </button>
         <button
           onClick={() => setChatOpen((v) => !v)}
@@ -422,6 +449,7 @@ export default function App() {
                 onOpen={handleOpen}
                 onSave={handleSave}
                 onSendSelection={handleSendSelection}
+                theme={theme === "light" ? "light" : "dark"}
               />
             )}
           </div>

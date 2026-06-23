@@ -11,3 +11,34 @@ body {
   overflow: hidden;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+
+/*
+ * Light theme: dark is the default (untouched). When <html class="light">,
+ * remap the specific surface/text/border classes the app uses. This keeps the
+ * dark theme 100% intact and confines light-mode styling to CSS only.
+ */
+html.light .bg-\[\#1e1e1e\] { background-color: #ffffff; }
+html.light .bg-\[\#1b1b1c\] { background-color: #f4f4f5; }
+html.light .bg-\[\#252526\] { background-color: #e9e9ec; }
+html.light .bg-\[\#2a2a2b\] { background-color: #ffffff; }
+html.light .bg-\[\#323233\] { background-color: #e4e4e7; }
+html.light .bg-\[\#2c2c2d\] { background-color: #dededf; }
+html.light .bg-\[\#1f1f20\] { background-color: #eeeef0; }
+html.light .bg-\[\#2d2d2d\] { background-color: #e9e9ec; }
+
+html.light .text-neutral-100,
+html.light .text-neutral-200,
+html.light .text-neutral-300 { color: #1f2937; }
+html.light .text-neutral-400 { color: #4b5563; }
+html.light .text-neutral-500 { color: #6b7280; }
+html.light .text-neutral-600 { color: #9ca3af; }
+
+html.light .border-neutral-700 { border-color: #cfcfd4; }
+html.light .border-neutral-800 { border-color: #dcdce0; }
+
+html.light .bg-neutral-700 { background-color: #d6d6db; }
+html.light .bg-neutral-800 { background-color: #e6e6ea; }
+html.light .bg-neutral-800\/60 { background-color: rgba(0, 0, 0, 0.05); }
+html.light .bg-neutral-800\/40 { background-color: rgba(0, 0, 0, 0.04); }
+html.light .hover\:bg-neutral-700:hover { background-color: #d6d6db; }
+html.light .hover\:bg-neutral-800:hover { background-color: #ececef; }

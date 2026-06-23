@@ -13,6 +13,7 @@ interface EditorPaneProps {
   onOpen: () => void;
   onSave: () => void;
   onSendSelection: (code: string, language: string) => void;
+  theme: "dark" | "light";
 }
 
 export default function EditorPane({
@@ -25,6 +26,7 @@ export default function EditorPane({
   onOpen,
   onSave,
   onSendSelection,
+  theme,
 }: EditorPaneProps) {
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
 
@@ -105,7 +107,7 @@ export default function EditorPane({
       <div className="min-h-0 flex-1">
         <Editor
           height="100%"
-          theme="vs-dark"
+          theme={theme === "light" ? "vs" : "vs-dark"}
           path={activeTab.id}
           language={activeTab.language}
           value={activeTab.content}
