@@ -278,6 +278,7 @@ export default function App() {
               currentCode={activeTab.content}
               currentFileName={activeTab.name}
               currentFilePath={activeTab.path}
+              workspaceRoot={workspaceRoot}
             />
           </div>
         </div>

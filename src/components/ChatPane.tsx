@@ -31,6 +31,7 @@ interface ChatPaneProps {
   currentCode: string;
   currentFileName: string;
   currentFilePath: string | null;
+  workspaceRoot: string | null;
 }
 
 export interface ChatPaneHandle {
@@ -43,7 +44,11 @@ interface PendingApproval {
   resolve: (ok: boolean) => void;
 }
 
-function buildSystemPrompt(fileName: string, filePath: string | null): ApiMessage {
+function buildSystemPrompt(
+  fileName: string,
+  filePath: string | null,
+  workspaceRoot: string | null,
+): ApiMessage {
   return {
     role: "system",
     content: `You are lokicode's coding agent embedded in a desktop code editor running on Windows (shell: cmd).
@@ -53,6 +58,7 @@ Guidelines:
 - Read files before editing them; after changes you may verify by reading files or running commands.
 - write_file and run_command require the user's approval; if a call is denied, propose an alternative.
 - Be concise. Reply in the user's language (Japanese if they write Japanese) and use Markdown.
+${workspaceRoot ? `The open workspace folder is: ${workspaceRoot} (use it as the base for relative work and as the cwd for run_command).` : ""}
 ${filePath ? `The user's active file is: ${filePath}` : `The active editor tab is unsaved (named "${fileName}").`}`,
   };
 }
@@ -141,7 +147,7 @@ function ThoughtCard({ item }: { item: Extract<AgentItem, { kind: "thought" }> }
 }
 
 const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
-  { onOpenSettings, settingsVersion, currentCode, currentFileName, currentFilePath },
+  { onOpenSettings, settingsVersion, currentCode, currentFileName, currentFilePath, workspaceRoot },
   ref,
 ) {
   const [items, setItems] = useState<AgentItem[]>(() => loadItems());
@@ -254,7 +260,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     abortRef.current = { aborted: false };
     const signal = abortRef.current;
 
-    const base: ApiMessage[] = [buildSystemPrompt(currentFileName, currentFilePath)];
+    const base: ApiMessage[] = [
+      buildSystemPrompt(currentFileName, currentFilePath, workspaceRoot),
+    ];
     if (includeFile && currentCode.trim()) {
       base.push({
         role: "system",
@@ -393,12 +401,21 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             <div key={i} className={isUser ? "flex justify-end" : "flex justify-start"}>
               <div
                 className={
-                  "max-w-[85%] rounded-lg px-3 py-2 " +
+                  "group relative max-w-[85%] rounded-lg px-3 py-2 " +
                   (isUser
                     ? "whitespace-pre-wrap bg-blue-600 text-sm text-white"
                     : "bg-neutral-800 text-neutral-100")
                 }
               >
+                {!isUser && it.content && (
+                  <button
+                    onClick={() => navigator.clipboard.writeText(it.content).catch(() => {})}
+                    title="コピー"
+                    className="absolute right-1 top-1 rounded bg-neutral-700/80 px-1.5 py-0.5 text-[10px] text-neutral-300 opacity-0 transition hover:text-neutral-100 group-hover:opacity-100"
+                  >
+                    コピー
+                  </button>
+                )}
                 {isUser ? it.content : <Markdown content={it.content} />}
               </div>
             </div>
