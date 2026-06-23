@@ -5,15 +5,24 @@
 // model for the thinking phases and a strong model for the final synthesis
 // (P2 Cost-Efficient Routing). D is user-controlled (P3 Adaptive Compute Control).
 //
+// When `useTools` is enabled, each thinking phase is itself a tool-using agent
+// mini-loop (§3.3 "脳と手の融合"), so self-verification is grounded in real files
+// and command output rather than the model's imagination.
+//
 // See /specs/architecture.md.
 
 import { complete, type ApiMessage } from "./openrouter";
+import { runAgent, type ToolStatus } from "./agent";
 
 export interface ReasoningCallbacks {
   /** Emitted for the draft and each reflection (thinking phases). */
   onThought: (label: string, model: string, content: string) => void;
   /** Emitted once with the final synthesized answer. */
   onFinal: (text: string) => void;
+  // Tool events (used only when useTools); mirror the agent's callbacks.
+  onToolStart: (call: { name: string; args: Record<string, unknown> }) => void;
+  onToolEnd: (status: ToolStatus, result: string) => void;
+  approve: (name: string, args: Record<string, unknown>) => Promise<boolean>;
 }
 
 export interface ReasoningOptions {
@@ -23,6 +32,9 @@ export interface ReasoningOptions {
   thinkingModel?: string;
   /** Strong model for final synthesis. Falls back to the default model. */
   synthesisModel?: string;
+  /** Let each thinking phase use tools (read/write/list/run). */
+  useTools: boolean;
+  autoApprove: boolean;
   signal?: { aborted: boolean };
 }
 
@@ -48,8 +60,25 @@ export async function runRecurrentReasoning(
   const depth = clampDepth(opts.depth);
   const thinkingLabel = thinking || "(default)";
 
+  // A "think" step: a tool-using agent mini-loop when useTools, else a plain completion.
+  const think = async (messages: ApiMessage[], model?: string): Promise<string> => {
+    if (opts.useTools) {
+      return runAgent(
+        messages,
+        {
+          onAssistantText: () => {}, // intermediate text is folded into the phase result
+          onToolStart: cb.onToolStart,
+          onToolEnd: cb.onToolEnd,
+          approve: cb.approve,
+        },
+        { autoApprove: opts.autoApprove, model, signal: opts.signal },
+      );
+    }
+    return complete(messages, model);
+  };
+
   // Phase 0 — draft (thinking model).
-  let draft = await complete([...base, DRAFT_NUDGE], thinking);
+  let draft = await think([...base, DRAFT_NUDGE], thinking);
   cb.onThought("初期ドラフト", thinkingLabel, draft);
 
   // Phase 1..D — reflect & refine (thinking model).
@@ -61,10 +90,11 @@ export async function runRecurrentReasoning(
       {
         role: "user",
         content:
-          "上記の解を批判的に検証し、誤り・不足・改善点を具体的に指摘した上で、改善した完全な解を提示してください。",
+          "上記の解を批判的に検証し、誤り・不足・改善点を具体的に指摘した上で、改善した完全な解を提示してください。" +
+          (opts.useTools ? "必要ならツールでファイルを読んだりコマンドを実行して事実確認してください。" : ""),
       },
     ];
-    draft = await complete(reflectMessages, thinking);
+    draft = await think(reflectMessages, thinking);
     cb.onThought(`内省 ${k}/${depth}`, thinkingLabel, draft);
   }
 
@@ -80,6 +110,6 @@ export async function runRecurrentReasoning(
         "これまでの検討を踏まえ、ユーザー向けの最終回答を簡潔かつ正確にまとめてください。コードは適切なコードブロックで示してください。",
     },
   ];
-  const final = await complete(synthesisMessages, synthesis);
+  const final = await think(synthesisMessages, synthesis);
   cb.onFinal(final);
 }

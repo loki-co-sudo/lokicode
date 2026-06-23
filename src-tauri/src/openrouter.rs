@@ -222,11 +222,14 @@ pub async fn chat_once(
     app: AppHandle,
     messages: serde_json::Value,
     tools: serde_json::Value,
+    model: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let Some(key) = resolve_key(&app) else {
         return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
     };
-    let model = resolve_model(&app);
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| resolve_model(&app));
 
     let mut body = serde_json::json!({
         "model": model,

@@ -29,9 +29,13 @@ export interface ApiMessage {
   tool_call_id?: string;
 }
 
-/** One non-streaming completion with tool-calling support. */
-export function chatOnce(messages: ApiMessage[], tools: unknown[]): Promise<ApiMessage> {
-  return invoke<ApiMessage>("chat_once", { messages, tools });
+/** One non-streaming completion with tool-calling support (optional model override). */
+export function chatOnce(
+  messages: ApiMessage[],
+  tools: unknown[],
+  model?: string,
+): Promise<ApiMessage> {
+  return invoke<ApiMessage>("chat_once", { messages, tools, model: model ?? null });
 }
 
 export interface SettingsStatus {

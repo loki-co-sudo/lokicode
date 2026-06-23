@@ -132,33 +132,40 @@ export interface AgentCallbacks {
 
 export interface AgentOptions {
   autoApprove: boolean;
+  /** Optional model override (used for cost-efficient routing in the reasoning core). */
+  model?: string;
   signal?: { aborted: boolean };
 }
 
 /**
  * Run the agent loop starting from `messages` (system + history + latest user).
  * Drives tool calls until the model returns a final answer with no tool calls.
+ * Returns the final assistant text.
  */
 export async function runAgent(
   messages: ApiMessage[],
   cb: AgentCallbacks,
   opts: AgentOptions,
-): Promise<void> {
+): Promise<string> {
   const conv: ApiMessage[] = [...messages];
+  let finalText = "";
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    if (opts.signal?.aborted) return;
+    if (opts.signal?.aborted) return finalText;
 
-    const assistant = await chatOnce(conv, TOOLS);
+    const assistant = await chatOnce(conv, TOOLS, opts.model);
     conv.push(assistant);
 
-    if (assistant.content) cb.onAssistantText(assistant.content);
+    if (assistant.content) {
+      finalText = assistant.content;
+      cb.onAssistantText(assistant.content);
+    }
 
     const calls = assistant.tool_calls ?? [];
-    if (calls.length === 0) return; // final answer reached
+    if (calls.length === 0) return finalText; // final answer reached
 
     for (const call of calls) {
-      if (opts.signal?.aborted) return;
+      if (opts.signal?.aborted) return finalText;
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(call.function.arguments || "{}");
@@ -193,7 +200,7 @@ export async function runAgent(
     }
   }
 
-  cb.onAssistantText(
-    `（ツール実行が上限の ${MAX_ITERATIONS} 回に達したため停止しました。続けるには指示を追加してください。）`,
-  );
+  const limitMsg = `（ツール実行が上限の ${MAX_ITERATIONS} 回に達したため停止しました。続けるには指示を追加してください。）`;
+  cb.onAssistantText(limitMsg);
+  return finalText || limitMsg;
 }

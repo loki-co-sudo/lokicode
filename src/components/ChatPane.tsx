@@ -153,6 +153,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [agentMode, setAgentMode] = useState(true);
   const [autoApprove, setAutoApprove] = useState(false);
   const [deepReasoning, setDeepReasoning] = useState(false);
+  const [reasoningTools, setReasoningTools] = useState(false);
   const [depth, setDepth] = useState<number>(() => {
     const v = Number(localStorage.getItem("lokicode.depth"));
     return v >= 1 && v <= MAX_DEPTH ? v : 4;
@@ -253,12 +254,19 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             depth,
             thinkingModel: thinkingModel || undefined,
             synthesisModel: synthesisModel || undefined,
+            useTools: reasoningTools,
+            autoApprove,
             signal,
           },
           {
             onThought: (label, m, content) =>
               appendItem({ kind: "thought", label, model: m, content }),
             onFinal: (text) => appendItem({ kind: "assistant", content: text }),
+            onToolStart: ({ name, args }) =>
+              appendItem({ kind: "tool", name, args, status: "running" }),
+            onToolEnd: (status, result) => updateLastTool(status, result),
+            approve: (name, args) =>
+              new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
           },
         );
       } else if (agentMode) {
@@ -410,18 +418,30 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             🧠 ディープ推論
           </label>
           {deepReasoning ? (
-            <label className="flex items-center gap-1.5" title="内省（自己検証）の反復回数。多いほど高品質・高コスト">
-              思考深度
-              <input
-                type="range"
-                min={1}
-                max={MAX_DEPTH}
-                value={depth}
-                onChange={(e) => setDepth(Number(e.target.value))}
-                className="accent-indigo-500"
-              />
-              <span className="w-5 text-center font-mono text-indigo-300">{depth}</span>
-            </label>
+            <>
+              <label className="flex items-center gap-1.5" title="内省（自己検証）の反復回数。多いほど高品質・高コスト">
+                思考深度
+                <input
+                  type="range"
+                  min={1}
+                  max={MAX_DEPTH}
+                  value={depth}
+                  onChange={(e) => setDepth(Number(e.target.value))}
+                  className="accent-indigo-500"
+                />
+                <span className="w-5 text-center font-mono text-indigo-300">{depth}</span>
+              </label>
+              <label className="flex items-center gap-1.5" title="各思考フェーズでファイル読み書き・コマンド実行を許可（脳と手の融合）">
+                <input type="checkbox" checked={reasoningTools} onChange={(e) => setReasoningTools(e.target.checked)} className="accent-indigo-500" />
+                推論中にツールを使う
+              </label>
+              {reasoningTools && (
+                <label className="flex items-center gap-1.5" title="承認なしで書き込み・コマンドを実行します（注意）">
+                  <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} className="accent-amber-500" />
+                  自動承認
+                </label>
+              )}
+            </>
           ) : (
             <>
               <label className="flex items-center gap-1.5">

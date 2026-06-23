@@ -81,6 +81,30 @@ API 呼び出し回数 = `1 (draft) + D (reflect) + 1 (synthesis)`。
 内省フェーズの出力に「これ以上の改善は不要 / CONVERGED」等が含まれたら打ち切る。
 プロトタイプでは任意機能とし、まずは固定回数 D を基本とする。
 
+### 3.3 Tool-Augmented Recurrent Depth（脳と手の融合）
+
+各思考フェーズ（draft / 各 reflection）を、**ツール実行エージェントのミニループ**として実行する。
+これにより、自己検証が「モデルの想像」ではなく**実ファイル・実コマンド結果に基づく事実**に
+なる（例: ファイルを読んで前提を確認、テストを実行して動作確認してから改善）。
+
+```
+think(messages, model):
+    if useTools:
+        return runAgent(messages, model)   # ツール呼び出し→結果→… を内部で反復し最終テキストを返す
+    else:
+        return complete(messages, model)
+
+# draft / reflection で think() を thinkingModel で呼ぶ（ツールは安価モデルで使う）
+# synthesis は synthesisModel で think()（高性能モデルで最終化、必要ならツールで最終確認）
+```
+
+- `runAgent` は既存のツール実行エージェント（`read_file`/`list_dir`/`write_file`/`run_command`）。
+  **モデル指定**を受け取れるよう拡張し、**最終アシスタントテキストを返す**。
+- 承認フロー（write/コマンド）・**停止**・タイムアウトはエージェントと共通の仕組みを再利用。
+- UI ではフェーズ内のツール実行をツールカードで、フェーズ結論を Thought カードで表示。
+
+トグル `useTools`（「推論中にツールを使う」）で 3.1（純推論）と 3.3（ツール統合）を切替。
+
 ## 4. Cost-Efficient Routing（P2）
 
 - **思考（draft / reflection）**: `thinkingModel`（超軽量・安価）。回数が多いほど効くため安価に。
@@ -128,7 +152,7 @@ type AgentItem =
 
 ## 9. 今後（本書のスコープ外・将来拡張）
 
-- 推論イテレーション中の**ツール使用統合**（脳と手の融合）。
+- [x] 推論イテレーション中の**ツール使用統合**（脳と手の融合, §3.3）
 - **収束ベースの早期終了**と動的深度（自己評価スコアで打ち切り）。
 - 複数ドラフトの**並列生成 + 投票（self-consistency）**。
 - フェーズごとのトークン/コスト計測の可視化。
