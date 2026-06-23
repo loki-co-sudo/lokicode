@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export type SidebarView = "explorer" | "git" | null;
+export type SidebarView = "explorer" | "search" | "git" | null;
 
 interface ActivityBarProps {
   view: SidebarView;
@@ -15,6 +15,16 @@ export default function ActivityBar({ view, onSelect }: ActivityBarProps) {
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 7h6l2 2h10v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+        </svg>
+      ),
+    },
+    {
+      id: "search",
+      title: "検索 / 置換",
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="7" />
+          <path d="M21 21l-4.3-4.3" />
         </svg>
       ),
     },

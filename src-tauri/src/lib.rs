@@ -144,6 +144,8 @@ pub fn run() {
             openrouter::chat_once_stream,
             openrouter::complete,
             search::grep_search,
+            search::list_files,
+            search::replace_in_files,
             openrouter::list_models,
             openrouter::get_settings,
             openrouter::save_settings,

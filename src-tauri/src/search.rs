@@ -18,6 +18,108 @@ pub struct SearchMatch {
     pub text: String,
 }
 
+/// Walk `root`, skipping heavy/ignored directories. Shared by search & listing.
+fn walk(root: &str) -> impl Iterator<Item = walkdir::DirEntry> {
+    WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| {
+            !(e.file_type().is_dir()
+                && e.file_name()
+                    .to_str()
+                    .map(|n| SKIP_DIRS.contains(&n))
+                    .unwrap_or(false))
+        })
+        .filter_map(|e| e.ok())
+}
+
+/// All file paths (relative to `root`) under the workspace — used by quick-open.
+#[tauri::command]
+pub fn list_files(root: String) -> Result<Vec<String>, String> {
+    let root_path = Path::new(&root);
+    let mut files = Vec::new();
+    for entry in walk(&root) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(root_path)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.push(rel);
+        if files.len() >= 20000 {
+            break;
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceResult {
+    pub files_changed: usize,
+    pub replacements: usize,
+}
+
+/// Replace all matches of `pattern` with `replacement` across the workspace.
+/// `is_regex` selects regex vs literal matching. Returns counts.
+#[tauri::command]
+pub fn replace_in_files(
+    root: String,
+    pattern: String,
+    replacement: String,
+    is_regex: bool,
+) -> Result<ReplaceResult, String> {
+    if pattern.is_empty() {
+        return Err("検索文字列が空です。".to_string());
+    }
+    let re = if is_regex {
+        Some(regex::Regex::new(&pattern).map_err(|e| format!("正規表現エラー: {e}"))?)
+    } else {
+        None
+    };
+    let mut files_changed = 0usize;
+    let mut replacements = 0usize;
+
+    for entry in walk(&root) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if entry.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let (new_content, count) = match &re {
+            Some(r) => {
+                let count = r.find_iter(&content).count();
+                if count == 0 {
+                    continue;
+                }
+                (r.replace_all(&content, replacement.as_str()).into_owned(), count)
+            }
+            None => {
+                let count = content.matches(&pattern).count();
+                if count == 0 {
+                    continue;
+                }
+                (content.replace(&pattern, &replacement), count)
+            }
+        };
+        if std::fs::write(entry.path(), new_content).is_ok() {
+            files_changed += 1;
+            replacements += count;
+        }
+    }
+    Ok(ReplaceResult {
+        files_changed,
+        replacements,
+    })
+}
+
 #[tauri::command]
 pub fn grep_search(
     root: String,
@@ -29,16 +131,7 @@ pub fn grep_search(
     let root_path = Path::new(&root);
     let mut matches = Vec::new();
 
-    let walker = WalkDir::new(&root).into_iter().filter_entry(|e| {
-        // Skip ignored directories by name.
-        !(e.file_type().is_dir()
-            && e.file_name()
-                .to_str()
-                .map(|n| SKIP_DIRS.contains(&n))
-                .unwrap_or(false))
-    });
-
-    for entry in walker.filter_map(|e| e.ok()) {
+    for entry in walk(&root) {
         if !entry.file_type().is_file() {
             continue;
         }

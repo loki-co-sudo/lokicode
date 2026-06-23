@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePersistentBool, usePersistentString } from "./lib/usePersistentState";
 import EditorPane from "./components/EditorPane";
@@ -8,6 +8,8 @@ import ExplorerPane from "./components/ExplorerPane";
 import SourceControlPane from "./components/SourceControlPane";
 import GitDiffView, { type DiffTarget } from "./components/GitDiffView";
 import UpdateBanner from "./components/UpdateBanner";
+import SearchPane from "./components/SearchPane";
+import CommandPalette, { type Command } from "./components/CommandPalette";
 import ActivityBar, { type SidebarView } from "./components/ActivityBar";
 import {
   openFile,
@@ -17,7 +19,10 @@ import {
   saveFileAs,
   fileNameFromPath,
   languageFromPath,
+  joinPath,
 } from "./lib/files";
+import { listFiles } from "./lib/search";
+import { addRecentFile, addRecentFolder, recentFolders } from "./lib/recent";
 
 export interface Tab {
   id: string;
@@ -65,7 +70,7 @@ export default function App() {
   const [workspaceRoot, setWorkspaceRoot] = usePersistentString("lokicode.workspaceRoot", null);
   const [sidebarView, setSidebarView] = useState<SidebarView>(() => {
     const s = localStorage.getItem("lokicode.sidebarView");
-    return s === "explorer" || s === "git" ? s : null;
+    return s === "explorer" || s === "search" || s === "git" ? s : null;
   });
   useEffect(() => {
     if (sidebarView) localStorage.setItem("lokicode.sidebarView", sidebarView);
@@ -76,6 +81,11 @@ export default function App() {
   const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
   // Whether the right-hand AI Agent pane is shown (collapsible like the sidebar).
   const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
+
+  // Command palette (Ctrl+Shift+P) and quick file open (Ctrl+P).
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteMode, setPaletteMode] = useState<"command" | "file">("command");
+  const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
 
   const [editorPct, setEditorPct] = useState(62);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -118,6 +128,7 @@ export default function App() {
     });
     setTabs((prev) => [...prev, tab]);
     setActiveId(tab.id);
+    addRecentFile(file.path);
   }, [tabs]);
 
   const openPath = useCallback(
@@ -141,16 +152,24 @@ export default function App() {
       });
       setTabs((prev) => [...prev, tab]);
       setActiveId(tab.id);
+      addRecentFile(path);
     },
     [tabs],
   );
 
+  const openFolderPath = useCallback(
+    (dir: string) => {
+      setWorkspaceRoot(dir);
+      setSidebarView("explorer");
+      addRecentFolder(dir);
+    },
+    [setWorkspaceRoot],
+  );
+
   const handleOpenFolder = useCallback(async () => {
     const dir = await openFolder();
-    if (!dir) return;
-    setWorkspaceRoot(dir);
-    setSidebarView("explorer");
-  }, []);
+    if (dir) openFolderPath(dir);
+  }, [openFolderPath]);
 
   const handleActivitySelect = useCallback((view: Exclude<SidebarView, null>) => {
     setSidebarView((cur) => (cur === view ? null : view));
@@ -208,17 +227,57 @@ export default function App() {
     [setChatOpen],
   );
 
-  // Ctrl/Cmd+S to save the active tab.
+  const openPalette = useCallback(
+    async (mode: "command" | "file") => {
+      if (mode === "file") {
+        if (!workspaceRoot) return;
+        try {
+          setPaletteFiles(await listFiles(workspaceRoot));
+        } catch {
+          setPaletteFiles([]);
+        }
+      }
+      setPaletteMode(mode);
+      setPaletteOpen(true);
+    },
+    [workspaceRoot],
+  );
+
+  const commands = useMemo<Command[]>(
+    () => [
+      { id: "open-folder", title: "フォルダを開く", hint: "Folder", run: handleOpenFolder },
+      { id: "open-file", title: "ファイルを開く", hint: "Ctrl+O", run: handleOpen },
+      { id: "quick-open", title: "ファイルへ移動（クイックオープン）", hint: "Ctrl+P", run: () => openPalette("file") },
+      { id: "save", title: "保存", hint: "Ctrl+S", run: handleSave },
+      { id: "new-tab", title: "新しいタブ", run: handleNewTab },
+      { id: "view-explorer", title: "エクスプローラを表示", run: () => setSidebarView("explorer") },
+      { id: "view-search", title: "検索 / 置換を表示", run: () => setSidebarView("search") },
+      { id: "view-git", title: "ソース管理を表示", run: () => setSidebarView("git") },
+      { id: "toggle-chat", title: "AI エージェントの表示切替", run: () => setChatOpen((v) => !v) },
+      { id: "settings", title: "設定を開く", run: () => setSettingsOpen(true) },
+      { id: "check-update", title: "更新を確認", run: () => setUpdateCheckNonce((n) => n + 1) },
+    ],
+    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen],
+  );
+
+  // Ctrl/Cmd+S to save; Ctrl+Shift+P command palette; Ctrl+P quick open.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        openPalette("command");
+      } else if (mod && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        openPalette("file");
+      } else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
         handleSave();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleSave]);
+  }, [handleSave, openPalette]);
 
   const onMouseDown = useCallback(() => {
     dragging.current = true;
@@ -289,6 +348,9 @@ export default function App() {
                 onClose={() => setSidebarView(null)}
               />
             </div>
+            <div className={sidebarView === "search" ? "h-full" : "hidden"}>
+              <SearchPane root={workspaceRoot} onOpenFile={openPath} />
+            </div>
             <div className={sidebarView === "git" ? "h-full" : "hidden"}>
               <SourceControlPane
                 root={workspaceRoot}
@@ -300,14 +362,32 @@ export default function App() {
         ) : (
           sidebarView && (
             <aside className="w-60 shrink-0 border-r border-neutral-800">
-              <div className="flex h-full flex-col items-start gap-3 bg-[#1b1b1c] p-3 text-xs text-neutral-400">
+              <div className="flex h-full flex-col items-stretch gap-3 bg-[#1b1b1c] p-3 text-xs text-neutral-400">
                 <p>フォルダを開くと、ここにファイルや Git の状態が表示されます。</p>
                 <button
                   onClick={handleOpenFolder}
-                  className="rounded bg-blue-600 px-3 py-1 text-white hover:bg-blue-500"
+                  className="self-start rounded bg-blue-600 px-3 py-1 text-white hover:bg-blue-500"
                 >
                   フォルダを開く
                 </button>
+                {recentFolders().length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+                      最近開いたフォルダ
+                    </div>
+                    {recentFolders().map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => openFolderPath(p)}
+                        title={p}
+                        className="block w-full truncate rounded px-2 py-1 text-left text-neutral-300 hover:bg-neutral-800"
+                      >
+                        {fileNameFromPath(p) || p}
+                        <span className="ml-1 text-neutral-600">{p}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </aside>
           )
@@ -375,6 +455,15 @@ export default function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onSaved={() => setSettingsVersion((v) => v + 1)}
+      />
+
+      <CommandPalette
+        open={paletteOpen}
+        mode={paletteMode}
+        commands={commands}
+        files={paletteFiles}
+        onClose={() => setPaletteOpen(false)}
+        onSelectFile={(rel) => workspaceRoot && openPath(joinPath(workspaceRoot, rel))}
       />
     </div>
   );
