@@ -1,6 +1,51 @@
 import { useEffect, useState } from "react";
 import { listDir, joinPath, fileNameFromPath, type DirEntry } from "../lib/files";
 
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="12" height="12" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+      className={"transition-transform " + (open ? "rotate-90" : "")}
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function FolderIcon({ open }: { open: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7aa6da" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      {open ? (
+        <path d="M3 7h6l2 2h8a1 1 0 0 1 1 1H4l-1 7zM3 7v10a1 1 0 0 0 1 1h15" />
+      ) : (
+        <path d="M3 7h6l2 2h10v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+      )}
+    </svg>
+  );
+}
+
+// Light color hint by file category — keeps the tree scannable like VS Code.
+function fileColor(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (["ts", "tsx", "js", "jsx", "mjs", "cjs"].includes(ext)) return "#e2c08d";
+  if (["rs"].includes(ext)) return "#d19a66";
+  if (["json", "lock", "toml", "yml", "yaml"].includes(ext)) return "#c0c781";
+  if (["css", "scss", "html"].includes(ext)) return "#7aa6da";
+  if (["md", "txt"].includes(ext)) return "#9aa0a6";
+  if (["png", "jpg", "jpeg", "svg", "gif", "ico"].includes(ext)) return "#b48ead";
+  return "#8c919a";
+}
+
+function FileIcon({ name }: { name: string }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={fileColor(name)} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 2h8l4 4v15a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" />
+      <path d="M14 2v5h5" />
+    </svg>
+  );
+}
+
 interface TreeNodeProps {
   path: string;
   name: string;
@@ -40,14 +85,21 @@ function TreeNode({ path, name, isDir, depth, activePath, onOpenFile }: TreeNode
       <div
         onClick={toggle}
         title={path}
-        style={{ paddingLeft: depth * 12 + 8 }}
+        style={{ paddingLeft: depth * 12 + 6 }}
         className={
-          "flex cursor-pointer items-center gap-1 py-0.5 pr-2 text-xs " +
-          (active ? "bg-neutral-700 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800")
+          "flex cursor-pointer items-center gap-1 py-[3px] pr-2 text-[13px] " +
+          (active
+            ? "bg-blue-600/25 text-neutral-100"
+            : "text-neutral-300 hover:bg-neutral-800")
         }
       >
-        <span className="w-3 text-neutral-500">{isDir ? (open ? "▾" : "▸") : ""}</span>
-        <span className="truncate">{isDir ? "📁" : "📄"} {name}</span>
+        <span className="flex w-3 shrink-0 justify-center text-neutral-500">
+          {isDir && <Chevron open={open} />}
+        </span>
+        <span className="flex shrink-0 items-center">
+          {isDir ? <FolderIcon open={open} /> : <FileIcon name={name} />}
+        </span>
+        <span className="truncate">{name}</span>
       </div>
       {isDir && open && (
         <div>

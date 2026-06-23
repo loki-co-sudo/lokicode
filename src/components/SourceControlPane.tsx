@@ -18,9 +18,12 @@ import {
 import { githubUser, type GithubUser } from "../lib/github";
 import { fileNameFromPath } from "../lib/files";
 import type { DiffTarget } from "./GitDiffView";
+import CommitGraph from "./CommitGraph";
 
 interface SourceControlPaneProps {
   root: string;
+  /** True when this pane is the visible sidebar view. */
+  active: boolean;
   onOpenDiff: (target: DiffTarget) => void;
 }
 
@@ -42,7 +45,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export default function SourceControlPane({ root, onOpenDiff }: SourceControlPaneProps) {
+export default function SourceControlPane({ root, active, onOpenDiff }: SourceControlPaneProps) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -70,6 +73,12 @@ export default function SourceControlPane({ root, onOpenDiff }: SourceControlPan
     reload();
     githubUser().then(setUser).catch(() => setUser(null));
   }, [reload]);
+
+  // Refresh in the background whenever the pane becomes visible. Existing data
+  // stays on screen during the fetch, so there is no "読み込み中…" flicker.
+  useEffect(() => {
+    if (active) reload();
+  }, [active, reload]);
 
   // Load history when the section is opened (and refresh on branch/commit changes).
   useEffect(() => {
@@ -333,20 +342,7 @@ export default function SourceControlPane({ root, onOpenDiff }: SourceControlPan
               {commits !== null && commits.length === 0 && (
                 <div className="px-3 py-1 text-xs text-neutral-600">コミットがありません</div>
               )}
-              {commits?.map((c) => (
-                <div
-                  key={c.hash}
-                  className="px-2 py-1 text-xs hover:bg-neutral-800"
-                  title={`${c.hash}\n${c.author} · ${c.date}`}
-                >
-                  <div className="truncate text-neutral-300">{c.subject}</div>
-                  <div className="flex gap-2 text-[10px] text-neutral-600">
-                    <span className="font-mono text-amber-500/80">{c.short}</span>
-                    <span className="truncate">{c.author}</span>
-                    <span>{c.date}</span>
-                  </div>
-                </div>
-              ))}
+              {commits && commits.length > 0 && <CommitGraph commits={commits} />}
             </div>
           )}
         </div>

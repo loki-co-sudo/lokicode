@@ -47,6 +47,8 @@ pub struct GitCommit {
     pub author: String,
     pub date: String,
     pub subject: String,
+    /// Parent commit hashes (0 = root, 1 = normal, 2+ = merge).
+    pub parents: Vec<String>,
 }
 
 /// Build `-c http.<host>.extraheader=...` args that authenticate github.com
@@ -304,8 +306,8 @@ pub fn git_push(app: AppHandle, cwd: String) -> Result<String, String> {
 #[tauri::command]
 pub fn git_log(cwd: String, limit: u32) -> Result<Vec<GitCommit>, String> {
     let n = format!("-n{}", limit.clamp(1, 500));
-    // Fields separated by US (0x1f), records by RS (0x1e).
-    let fmt = "--pretty=format:%H\x1f%h\x1f%an\x1f%ad\x1f%s\x1e";
+    // Fields separated by US (0x1f), records by RS (0x1e). %P = parent hashes.
+    let fmt = "--pretty=format:%H\x1f%h\x1f%an\x1f%ad\x1f%P\x1f%s\x1e";
     let (out, err, c) = run_git(&cwd, &["log", &n, "--date=short", fmt])?;
     if c != 0 {
         return Err(err);
@@ -317,13 +319,18 @@ pub fn git_log(cwd: String, limit: u32) -> Result<Vec<GitCommit>, String> {
             continue;
         }
         let f: Vec<&str> = rec.split('\x1f').collect();
-        if f.len() >= 5 {
+        if f.len() >= 6 {
+            let parents = f[4]
+                .split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
             commits.push(GitCommit {
                 hash: f[0].to_string(),
                 short: f[1].to_string(),
                 author: f[2].to_string(),
                 date: f[3].to_string(),
-                subject: f[4].to_string(),
+                parents,
+                subject: f[5].to_string(),
             });
         }
     }

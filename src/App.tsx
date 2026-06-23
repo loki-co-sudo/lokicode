@@ -241,9 +241,35 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <ActivityBar view={sidebarView} onSelect={handleActivitySelect} />
 
-        {sidebarView && (
-          <aside className="w-60 shrink-0 border-r border-neutral-800">
-            {!workspaceRoot ? (
+        {workspaceRoot ? (
+          // Keep both panes mounted so their data survives view switches
+          // (no reload flicker); collapse to width 0 when the sidebar is hidden.
+          <aside
+            className={
+              "shrink-0 border-r border-neutral-800 " +
+              (sidebarView ? "w-60" : "w-0 overflow-hidden border-r-0")
+            }
+          >
+            <div className={sidebarView === "explorer" ? "h-full" : "hidden"}>
+              <ExplorerPane
+                root={workspaceRoot}
+                activePath={activeTab.path}
+                onOpenFile={openPath}
+                onOpenFolder={handleOpenFolder}
+                onClose={() => setSidebarView(null)}
+              />
+            </div>
+            <div className={sidebarView === "git" ? "h-full" : "hidden"}>
+              <SourceControlPane
+                root={workspaceRoot}
+                active={sidebarView === "git"}
+                onOpenDiff={setDiffTarget}
+              />
+            </div>
+          </aside>
+        ) : (
+          sidebarView && (
+            <aside className="w-60 shrink-0 border-r border-neutral-800">
               <div className="flex h-full flex-col items-start gap-3 bg-[#1b1b1c] p-3 text-xs text-neutral-400">
                 <p>フォルダを開くと、ここにファイルや Git の状態が表示されます。</p>
                 <button
@@ -253,18 +279,8 @@ export default function App() {
                   フォルダを開く
                 </button>
               </div>
-            ) : sidebarView === "explorer" ? (
-              <ExplorerPane
-                root={workspaceRoot}
-                activePath={activeTab.path}
-                onOpenFile={openPath}
-                onOpenFolder={handleOpenFolder}
-                onClose={() => setSidebarView(null)}
-              />
-            ) : (
-              <SourceControlPane root={workspaceRoot} onOpenDiff={setDiffTarget} />
-            )}
-          </aside>
+            </aside>
+          )
         )}
 
         <div

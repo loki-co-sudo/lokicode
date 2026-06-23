@@ -28,6 +28,7 @@ export interface GitCommit {
   author: string;
   date: string;
   subject: string;
+  parents: string[];
 }
 
 export function gitStatus(cwd: string): Promise<GitStatus> {
