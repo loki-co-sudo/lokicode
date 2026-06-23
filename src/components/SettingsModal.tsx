@@ -15,6 +15,7 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
   const [model, setModel] = useState("");
   const [thinkingModel, setThinkingModel] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -24,6 +25,7 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
       setModel(s.model);
       setThinkingModel(s.thinkingModel);
       setSynthesisModel(s.synthesisModel);
+      setBaseUrl(s.baseUrl);
       setApiKey(""); // never prefill the secret
     });
   }, [open]);
@@ -39,6 +41,7 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
         model: model.trim(),
         thinkingModel: thinkingModel.trim(),
         synthesisModel: synthesisModel.trim(),
+        baseUrl: baseUrl.trim(),
       });
       onSaved();
       onClose();
@@ -76,6 +79,21 @@ export default function SettingsModal({ open, onClose, onSaved }: SettingsModalP
           }
           className="mb-4 w-full rounded-md border border-neutral-700 bg-[#1e1e1e] px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500"
         />
+
+        <label className="mb-1 block text-sm text-neutral-300">API ベース URL（任意）</label>
+        <input
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="空欄で OpenRouter。Ollama 例: http://localhost:11434/v1"
+          className="mb-1 w-full rounded-md border border-neutral-700 bg-[#1e1e1e] px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500"
+        />
+        <p className="mb-4 text-xs text-neutral-500">
+          OpenAI 互換エンドポイントを指定するとローカル LLM（Ollama 等）や他プロバイダを利用できます。
+          指定時は API キーが任意（ローカルは不要）になり、モデル一覧もそのサーバから取得します。
+        </p>
 
         <label className="mb-1 block text-sm text-neutral-300">モデル（既定）</label>
         <ModelPicker value={model} onChange={setModel} listId="settings-models" className="mb-1" />

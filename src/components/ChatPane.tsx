@@ -22,7 +22,7 @@ import {
 } from "../lib/agent";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { joinPath } from "../lib/files";
+import { joinPath, writeFile, deleteFile } from "../lib/files";
 import { listFiles } from "../lib/search";
 import { runRecurrentReasoning, MAX_DEPTH, MAX_SAMPLES } from "../lib/reasoning";
 import { useModels } from "../lib/useModels";
@@ -271,6 +271,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [threadMenu, setThreadMenu] = useState(false);
   const [input, setInput] = useState("");
 
+  // Checkpoint of files the agent edited this session (path → content before edit).
+  const [edits, setEdits] = useState<Map<string, string | null>>(new Map());
+
   // @-mention: workspace file list + suggestion popup state.
   const [wsFiles, setWsFiles] = useState<string[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -516,6 +519,30 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     saveThread(threadId, []);
     setError(null);
     setUsage({ tokens: 0, cost: 0 });
+    setEdits(new Map());
+  }
+
+  // Record the pre-edit content the first time the agent touches a file.
+  function recordFileEdit(path: string, before: string | null) {
+    setEdits((m) => {
+      if (m.has(path)) return m;
+      const n = new Map(m);
+      n.set(path, before);
+      return n;
+    });
+  }
+
+  async function undoEdits() {
+    for (const [path, before] of edits.entries()) {
+      try {
+        if (before === null) await deleteFile(path);
+        else await writeFile(path, before);
+      } catch {
+        /* best-effort revert */
+      }
+    }
+    setEdits(new Map());
+    appendItem({ kind: "assistant", content: "_（AI による変更を元に戻しました。開いているタブは開き直してください）_" });
   }
 
   function switchThread(id: string) {
@@ -527,6 +554,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setThreads(listThreads());
     setUsage({ tokens: 0, cost: 0 });
     setError(null);
+    setEdits(new Map());
   }
 
   function newThread() {
@@ -537,6 +565,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setThreads(listThreads());
     setUsage({ tokens: 0, cost: 0 });
     setError(null);
+    setEdits(new Map());
   }
 
   function renameCurrentThread() {
@@ -631,6 +660,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             approve: (name, args) =>
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
             onUsage: addUsage,
+            onFileEdit: recordFileEdit,
           },
         );
       } else if (agentMode) {
@@ -647,6 +677,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             approve: (name, args) =>
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
             onUsage: addUsage,
+            onFileEdit: recordFileEdit,
           },
           { autoApprove, signal, workspaceRoot: workspaceRoot ?? undefined },
         );
@@ -920,6 +951,18 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       )}
 
       <div className="border-t border-neutral-800 p-3">
+        {edits.size > 0 && (
+          <div className="mb-2 flex items-center gap-2 rounded bg-neutral-800/60 px-2 py-1 text-[11px] text-neutral-300">
+            <span>AI が {edits.size} ファイルを変更しました</span>
+            <button
+              onClick={undoEdits}
+              title="このセッションでの AI の変更をすべて元に戻す"
+              className="ml-auto rounded bg-neutral-700 px-2 py-0.5 hover:bg-neutral-600"
+            >
+              ↩ 変更を元に戻す
+            </button>
+          </div>
+        )}
         <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-neutral-400">
           <Toggle
             checked={agentMode}

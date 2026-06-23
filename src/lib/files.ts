@@ -24,6 +24,10 @@ export function readFile(path: string): Promise<string> {
   return invoke<string>("read_text_file", { path });
 }
 
+export function deleteFile(path: string): Promise<void> {
+  return invoke("delete_file", { path });
+}
+
 export interface DirEntry {
   name: string;
   isDir: boolean;

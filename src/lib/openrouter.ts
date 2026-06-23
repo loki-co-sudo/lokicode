@@ -84,6 +84,7 @@ export interface SettingsStatus {
   keySource: "config" | "env" | "none";
   thinkingModel: string;
   synthesisModel: string;
+  baseUrl: string;
 }
 
 export interface ModelInfo {
@@ -126,12 +127,14 @@ export function saveSettings(opts: {
   model?: string;
   thinkingModel?: string;
   synthesisModel?: string;
+  baseUrl?: string;
 }): Promise<void> {
   return invoke("save_settings", {
     apiKey: opts.apiKey ?? null,
     model: opts.model ?? null,
     thinkingModel: opts.thinkingModel ?? null,
     synthesisModel: opts.synthesisModel ?? null,
+    baseUrl: opts.baseUrl ?? null,
   });
 }
 

@@ -203,6 +203,8 @@ export interface AgentCallbacks {
   onToolEnd: (status: ToolStatus, result: string) => void;
   /** The agent updated its task plan. */
   onPlan?: (todos: Todo[]) => void;
+  /** About to write a file: `prev` is its content before the write, or null if new. */
+  onFileEdit?: (path: string, prev: string | null) => void;
   /** Ask the user to approve a risky tool call. */
   approve: (name: string, args: Record<string, unknown>) => Promise<boolean>;
   /** Reports token/cost usage for each underlying API call. */
@@ -286,6 +288,18 @@ export async function runAgent(
           status = "denied";
           result = "ユーザーが操作を拒否しました。別の方法を検討してください。";
         }
+      }
+
+      // Snapshot the file before an approved write so the edit can be undone.
+      if (status !== "denied" && name === "write_file") {
+        const p = String(args.path ?? "");
+        let prev: string | null = null;
+        try {
+          prev = await invoke<string>("read_text_file", { path: p });
+        } catch {
+          prev = null; // file did not exist
+        }
+        cb.onFileEdit?.(p, prev);
       }
 
       if (status !== "denied") {

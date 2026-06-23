@@ -24,6 +24,7 @@ export interface ReasoningCallbacks {
   onToolEnd: (status: ToolStatus, result: string) => void;
   approve: (name: string, args: Record<string, unknown>) => Promise<boolean>;
   onUsage?: (usage: Usage) => void;
+  onFileEdit?: (path: string, prev: string | null) => void;
 }
 
 export interface ReasoningOptions {
@@ -75,6 +76,7 @@ export async function runRecurrentReasoning(
           onToolEnd: cb.onToolEnd,
           approve: cb.approve,
           onUsage: cb.onUsage,
+          onFileEdit: cb.onFileEdit,
         },
         { autoApprove: opts.autoApprove, model, signal: opts.signal },
       );

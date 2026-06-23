@@ -9,7 +9,6 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::{ipc::Channel, AppHandle, Manager};
 
-const API_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.6";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +54,24 @@ struct Settings {
     thinking_model: Option<String>,
     /// High-performance model used for the final synthesis phase.
     synthesis_model: Option<String>,
+    /// OpenAI-compatible API base URL (e.g. Ollama: http://localhost:11434/v1).
+    /// Empty/unset → OpenRouter.
+    base_url: Option<String>,
+}
+
+/// OpenAI-compatible base URL when none is configured.
+const DEFAULT_BASE: &str = "https://openrouter.ai/api/v1";
+
+fn resolve_base(app: &AppHandle) -> String {
+    load_settings(app)
+        .base_url
+        .filter(|b| !b.trim().is_empty())
+        .map(|b| b.trim().trim_end_matches('/').to_string())
+        .unwrap_or_else(|| DEFAULT_BASE.to_string())
+}
+
+fn is_default_base(base: &str) -> bool {
+    base.starts_with("https://openrouter.ai")
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -102,6 +119,8 @@ pub struct SettingsStatus {
     /// Empty string if unset (falls back to `model`).
     pub thinking_model: String,
     pub synthesis_model: String,
+    /// Configured API base URL (empty = OpenRouter default).
+    pub base_url: String,
 }
 
 #[tauri::command]
@@ -120,6 +139,7 @@ pub fn get_settings(app: AppHandle) -> SettingsStatus {
         key_source: key_source.to_string(),
         thinking_model: cfg.thinking_model.unwrap_or_default(),
         synthesis_model: cfg.synthesis_model.unwrap_or_default(),
+        base_url: cfg.base_url.unwrap_or_default(),
     }
 }
 
@@ -130,6 +150,7 @@ pub fn save_settings(
     model: Option<String>,
     thinking_model: Option<String>,
     synthesis_model: Option<String>,
+    base_url: Option<String>,
 ) -> Result<(), String> {
     let mut cfg = load_settings(&app);
     if let Some(k) = api_key {
@@ -143,6 +164,9 @@ pub fn save_settings(
     }
     if let Some(m) = synthesis_model {
         cfg.synthesis_model = if m.trim().is_empty() { None } else { Some(m) };
+    }
+    if let Some(b) = base_url {
+        cfg.base_url = if b.trim().is_empty() { None } else { Some(b) };
     }
     let path = config_path(&app)?;
     if let Some(parent) = path.parent() {
@@ -169,12 +193,18 @@ pub struct ModelInfo {
 /// Fetch the list of models currently available on OpenRouter so the picker is
 /// always up to date (no hardcoded list to maintain). This endpoint is public.
 #[tauri::command]
-pub async fn list_models() -> Result<Vec<ModelInfo>, String> {
+pub async fn list_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
+    let base = resolve_base(&app);
+    let key = resolve_key(&app);
     let client = reqwest::Client::new();
-    let resp = client
-        .get("https://openrouter.ai/api/v1/models")
+    let mut req = client
+        .get(format!("{base}/models"))
         .header("HTTP-Referer", "http://localhost")
-        .header("X-Title", "lokicode")
+        .header("X-Title", "lokicode");
+    if let Some(k) = &key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("通信エラー: {e}"))?;
@@ -221,9 +251,11 @@ pub async fn complete(
     messages: serde_json::Value,
     model: Option<String>,
 ) -> Result<CompleteResult, String> {
-    let Some(key) = resolve_key(&app) else {
+    let base = resolve_base(&app);
+    let key = resolve_key(&app);
+    if key.is_none() && is_default_base(&base) {
         return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
-    };
+    }
     let model = model
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| resolve_model(&app));
@@ -235,21 +267,21 @@ pub async fn complete(
     });
 
     let client = reqwest::Client::new();
-    let resp = client
-        .post(API_URL)
-        .bearer_auth(key)
+    let mut req = client
+        .post(format!("{base}/chat/completions"))
         .header("HTTP-Referer", "http://localhost")
         .header("X-Title", "lokicode")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("通信エラー: {e}"))?;
+        .json(&body);
+    if let Some(k) = &key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
 
     let status = resp.status();
     let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
         let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
-        return Err(format!("OpenRouter エラー (HTTP {status}): {detail}"));
+        return Err(format!("API エラー (HTTP {status}): {detail}"));
     }
     Ok(CompleteResult {
         content: json["choices"][0]["message"]["content"]
@@ -276,9 +308,11 @@ pub async fn chat_once(
     tools: serde_json::Value,
     model: Option<String>,
 ) -> Result<ChatOnceResult, String> {
-    let Some(key) = resolve_key(&app) else {
+    let base = resolve_base(&app);
+    let key = resolve_key(&app);
+    if key.is_none() && is_default_base(&base) {
         return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
-    };
+    }
     let model = model
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| resolve_model(&app));
@@ -294,21 +328,21 @@ pub async fn chat_once(
     }
 
     let client = reqwest::Client::new();
-    let resp = client
-        .post(API_URL)
-        .bearer_auth(key)
+    let mut req = client
+        .post(format!("{base}/chat/completions"))
         .header("HTTP-Referer", "http://localhost")
         .header("X-Title", "lokicode")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("通信エラー: {e}"))?;
+        .json(&body);
+    if let Some(k) = &key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
 
     let status = resp.status();
     let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
         let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
-        return Err(format!("OpenRouter エラー (HTTP {status}): {detail}"));
+        return Err(format!("API エラー (HTTP {status}): {detail}"));
     }
     Ok(ChatOnceResult {
         message: json["choices"][0]["message"].clone(),
@@ -342,11 +376,13 @@ pub async fn chat_once_stream(
     model: Option<String>,
     on_event: Channel<AgentStreamEvent>,
 ) -> Result<(), String> {
-    let Some(key) = resolve_key(&app) else {
+    let base = resolve_base(&app);
+    let key = resolve_key(&app);
+    if key.is_none() && is_default_base(&base) {
         let msg = "APIキーが未設定です。右上の設定からキーを入力してください。".to_string();
         let _ = on_event.send(AgentStreamEvent::Error { message: msg.clone() });
         return Err(msg);
-    };
+    }
     let model = model
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| resolve_model(&app));
@@ -364,20 +400,20 @@ pub async fn chat_once_stream(
     }
 
     let client = reqwest::Client::new();
-    let resp = client
-        .post(API_URL)
-        .bearer_auth(key)
+    let mut req = client
+        .post(format!("{base}/chat/completions"))
         .header("HTTP-Referer", "http://localhost")
         .header("X-Title", "lokicode")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("通信エラー: {e}"))?;
+        .json(&body);
+    if let Some(k) = &key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        let msg = format!("OpenRouter エラー (HTTP {status}): {text}");
+        let msg = format!("API エラー (HTTP {status}): {text}");
         let _ = on_event.send(AgentStreamEvent::Error { message: msg.clone() });
         return Err(msg);
     }
@@ -489,11 +525,13 @@ pub async fn send_chat(
     messages: Vec<ChatMessage>,
     on_event: Channel<StreamEvent>,
 ) -> Result<(), String> {
-    let Some(key) = resolve_key(&app) else {
+    let base = resolve_base(&app);
+    let key = resolve_key(&app);
+    if key.is_none() && is_default_base(&base) {
         let msg = "APIキーが未設定です。右上の設定からキーを入力してください。".to_string();
         let _ = on_event.send(StreamEvent::Error { message: msg.clone() });
         return Err(msg);
-    };
+    }
     let model = resolve_model(&app);
 
     let body = serde_json::json!({
@@ -503,20 +541,20 @@ pub async fn send_chat(
     });
 
     let client = reqwest::Client::new();
-    let resp = client
-        .post(API_URL)
-        .bearer_auth(key)
+    let mut req = client
+        .post(format!("{base}/chat/completions"))
         .header("HTTP-Referer", "http://localhost")
         .header("X-Title", "lokicode")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("通信エラー: {e}"))?;
+        .json(&body);
+    if let Some(k) = &key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        let msg = format!("OpenRouter エラー (HTTP {status}): {text}");
+        let msg = format!("API エラー (HTTP {status}): {text}");
         let _ = on_event.send(StreamEvent::Error { message: msg.clone() });
         return Err(msg);
     }
