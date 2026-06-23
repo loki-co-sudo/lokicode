@@ -13,6 +13,39 @@ const ACTIVE_KEY = "lokicode.activeThread";
 const itemsKey = (id: string) => `lokicode.chat.${id}`;
 const LEGACY_KEY = "lokicode.chat";
 
+/** Write a key, swallowing failures (quota full / private mode). Returns success. */
+export function safeSetItem(key: string, value: string): boolean {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Per-thread persistence is bounded so a long agent run (full file contents,
+// command output, grep results accumulate in tool results) can't fill the
+// ~5MB localStorage quota and wedge the whole app on the next launch.
+const MAX_FIELD = 16_000; // cap any single text field
+const MAX_ITEMS = 400; // cap items kept per thread
+
+function truncate(s: string): string {
+  return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\n…(省略)" : s;
+}
+
+/** A persistence-only clone with oversized text fields trimmed. The live,
+ * in-memory items keep their full content; only what we store is shrunk. */
+function trimForStorage(items: AgentItem[]): AgentItem[] {
+  const recent = items.length > MAX_ITEMS ? items.slice(-MAX_ITEMS) : items;
+  return recent.map((it) => {
+    if (it.kind === "tool") return { ...it, result: truncate(it.result ?? "") };
+    if (it.kind === "assistant" || it.kind === "user")
+      return { ...it, content: truncate(it.content) };
+    if (it.kind === "thought") return { ...it, content: truncate(it.content) };
+    return it;
+  });
+}
+
 function readThreads(): Thread[] {
   try {
     const v = JSON.parse(localStorage.getItem(THREADS_KEY) ?? "[]");
@@ -23,7 +56,7 @@ function readThreads(): Thread[] {
 }
 
 function writeThreads(threads: Thread[]) {
-  localStorage.setItem(THREADS_KEY, JSON.stringify(threads));
+  safeSetItem(THREADS_KEY, JSON.stringify(threads));
 }
 
 export function listThreads(): Thread[] {
@@ -71,16 +104,19 @@ export function loadThread(id: string): AgentItem[] {
 }
 
 export function saveThread(id: string, items: AgentItem[]) {
-  try {
-    localStorage.setItem(itemsKey(id), JSON.stringify(items));
-    const threads = readThreads();
-    const t = threads.find((x) => x.id === id);
-    if (t) {
-      t.updatedAt = Date.now();
-      writeThreads(threads);
-    }
-  } catch {
-    // storage full / unavailable — non-fatal
+  const trimmed = trimForStorage(items);
+  // If even the trimmed thread won't fit, shed older items until it does so a
+  // single huge conversation can't permanently exhaust the quota.
+  let kept = trimmed;
+  while (kept.length > 0 && !safeSetItem(itemsKey(id), JSON.stringify(kept))) {
+    kept = kept.slice(Math.ceil(kept.length / 2)); // drop the oldest half, retry
+  }
+  if (kept.length === 0) safeSetItem(itemsKey(id), "[]");
+  const threads = readThreads();
+  const t = threads.find((x) => x.id === id);
+  if (t) {
+    t.updatedAt = Date.now();
+    writeThreads(threads);
   }
 }
 

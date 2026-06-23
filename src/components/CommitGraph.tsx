@@ -113,7 +113,7 @@ export default function CommitGraph({ commits }: { commits: GitCommit[] }) {
         <div
           key={row.commit.hash}
           className="flex items-stretch hover:bg-neutral-800"
-          title={`${row.commit.hash}\n${row.commit.author} · ${row.commit.date}`}
+          title={`${row.commit.subject}\n\n${row.commit.short}  ${row.commit.author} · ${row.commit.date}`}
         >
           <RowGraph row={row} width={width} />
           <div className="min-w-0 flex-1 py-1 pr-2" style={{ height: ROW_H }}>

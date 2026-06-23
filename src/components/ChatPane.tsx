@@ -42,6 +42,7 @@ import {
   renameThread,
   deleteThread,
   setActiveThreadId,
+  safeSetItem,
   type Thread,
 } from "../lib/chatStorage";
 import { usePersistentBool } from "../lib/usePersistentState";
@@ -304,7 +305,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     return v > 0 ? v : 0;
   });
   useEffect(() => {
-    localStorage.setItem("lokicode.costLimit", String(costLimit));
+    safeSetItem("lokicode.costLimit", String(costLimit));
   }, [costLimit]);
   const overLimit = costLimit > 0 && usage.cost >= costLimit;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -426,11 +427,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   }, [threadId, items]);
 
   useEffect(() => {
-    localStorage.setItem("lokicode.depth", String(depth));
+    safeSetItem("lokicode.depth", String(depth));
   }, [depth]);
 
   useEffect(() => {
-    localStorage.setItem("lokicode.samples", String(samples));
+    safeSetItem("lokicode.samples", String(samples));
   }, [samples]);
 
   useEffect(() => {

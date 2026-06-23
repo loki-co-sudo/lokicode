@@ -5,7 +5,7 @@ import type { editor as MonacoEditor } from "monaco-editor";
 import { usePersistentBool, usePersistentString } from "./lib/usePersistentState";
 import EditorPane from "./components/EditorPane";
 import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
-import SettingsModal from "./components/SettingsModal";
+import SettingsPane from "./components/SettingsPane";
 import ExplorerPane from "./components/ExplorerPane";
 import SourceControlPane from "./components/SourceControlPane";
 import GitDiffView, { type DiffTarget } from "./components/GitDiffView";
@@ -27,6 +27,7 @@ import {
 } from "./lib/files";
 import { listFiles } from "./lib/search";
 import { addRecentFile, addRecentFolder, recentFolders } from "./lib/recent";
+import { safeSetItem } from "./lib/chatStorage";
 import { loadKeybindings, comboFromEvent, type ActionId } from "./lib/keybindings";
 
 export interface Tab {
@@ -38,15 +39,6 @@ export interface Tab {
   dirty: boolean;
   pinned?: boolean;
 }
-
-const SAMPLE_CODE = `// index.js — sample file
-function greet(name) {
-  return \`Hello, \${name}!\`;
-}
-
-const target = "world";
-console.log(greet(target));
-`;
 
 let untitledCounter = 1;
 
@@ -63,12 +55,11 @@ function createTab(partial: Partial<Tab> = {}): Tab {
 }
 
 export default function App() {
-  const [tabs, setTabs] = useState<Tab[]>(() => [
-    createTab({ name: "index.js", language: "javascript", content: SAMPLE_CODE }),
-  ]);
-  const [activeId, setActiveId] = useState(() => tabs[0].id);
+  // Start with no open files; the editor shows an empty state until the user
+  // opens or creates one (a sample file on launch only caused confusion).
+  const [tabs, setTabs] = useState<Tab[]>(() => []);
+  const [activeId, setActiveId] = useState("");
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsVersion, setSettingsVersion] = useState(0);
 
   // Open workspace folders (multi-root). The first is the "primary" root used by
@@ -84,7 +75,7 @@ export default function App() {
     return old ? [old] : [];
   });
   useEffect(() => {
-    localStorage.setItem("lokicode.workspaceRoots", JSON.stringify(workspaceRoots));
+    safeSetItem("lokicode.workspaceRoots", JSON.stringify(workspaceRoots));
   }, [workspaceRoots]);
   const workspaceRoot = workspaceRoots[0] ?? null;
   const [sidebarView, setSidebarView] = useState<SidebarView>(() => {
@@ -92,7 +83,7 @@ export default function App() {
     return s === "explorer" || s === "search" || s === "git" ? s : null;
   });
   useEffect(() => {
-    if (sidebarView) localStorage.setItem("lokicode.sidebarView", sidebarView);
+    if (sidebarView) safeSetItem("lokicode.sidebarView", sidebarView);
     else localStorage.removeItem("lokicode.sidebarView");
   }, [sidebarView]);
 
@@ -131,8 +122,9 @@ export default function App() {
   const chatRef = useRef<ChatPaneHandle>(null);
   const editorInstanceRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
 
-  const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
-  const rightTab = tabs.find((t) => t.id === rightActiveId) ?? activeTab;
+  // `activeTab` is undefined when no files are open (empty state).
+  const activeTab: Tab | undefined = tabs.find((t) => t.id === activeId);
+  const rightTab: Tab | undefined = tabs.find((t) => t.id === rightActiveId) ?? activeTab;
 
   const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -291,13 +283,13 @@ export default function App() {
       }
       setTabs((prev) => {
         const remaining = prev.filter((t) => t.id !== id);
-        const next = remaining.length > 0 ? remaining : [createTab({ name: "untitled" })];
+        // Closing the last tab leaves an empty editor (no auto "untitled").
         if (id === activeId) {
           const idx = prev.findIndex((t) => t.id === id);
-          const neighbor = next[Math.min(idx, next.length - 1)];
-          setActiveId(neighbor.id);
+          const neighbor = remaining[Math.min(idx, remaining.length - 1)];
+          setActiveId(neighbor?.id ?? "");
         }
-        return next;
+        return remaining;
       });
     },
     [tabs, activeId],
@@ -337,13 +329,13 @@ export default function App() {
         title: "テーマ切替（ライト / ダーク）",
         run: () => setTheme((t) => (t === "light" ? "dark" : "light")),
       },
-      { id: "settings", title: "設定を開く", run: () => setSettingsOpen(true) },
+      { id: "settings", title: "設定を開く", run: () => setSidebarView("settings") },
       { id: "check-update", title: "更新を確認", run: () => setUpdateCheckNonce((n) => n + 1) },
       {
         id: "git-blame",
         title: "Git: 現在のファイルの blame",
         run: () => {
-          if (activeTab.path) setBlamePath(activeTab.path);
+          if (activeTab?.path) setBlamePath(activeTab.path);
         },
       },
       {
@@ -364,7 +356,7 @@ export default function App() {
         },
       },
     ],
-    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setAutoSave, setTheme, activeTab.path, activeId],
+    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setAutoSave, setTheme, activeTab?.path, activeId],
   );
 
   // Configurable keyboard shortcuts (reloaded when settings change).
@@ -418,14 +410,15 @@ export default function App() {
 
   // Auto-save: write the active tab a short delay after the last edit.
   useEffect(() => {
-    if (!autoSave || !activeTab.path || !activeTab.dirty) return;
+    if (!autoSave || !activeTab?.path || !activeTab.dirty) return;
+    const { path, content, id: tabId } = activeTab;
     const id = window.setTimeout(() => {
-      writeFile(activeTab.path!, activeTab.content)
-        .then(() => updateTab(activeTab.id, { dirty: false }))
+      writeFile(path, content)
+        .then(() => updateTab(tabId, { dirty: false }))
         .catch(() => {});
     }, 800);
     return () => window.clearTimeout(id);
-  }, [autoSave, activeTab.path, activeTab.content, activeTab.dirty, activeTab.id, updateTab]);
+  }, [autoSave, activeTab?.path, activeTab?.content, activeTab?.dirty, activeTab?.id, updateTab]);
 
   // Open files dragged onto the window.
   const openPathRef = useRef(openPath);
@@ -446,8 +439,17 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-[#1e1e1e] text-neutral-200">
       <header className="flex items-center gap-2 border-b border-neutral-800 bg-[#323233] px-3 py-2">
+        <svg width="22" height="22" viewBox="0 0 48 48" fill="none" aria-label="lokicode">
+          <rect x="2" y="2" width="44" height="44" rx="11" fill="#171029" />
+          <path d="M20 18 C16 13 12 10 7 8 C9 13 12 18 19 21 Z" fill="#39e25a" />
+          <path d="M28 18 C32 13 36 10 41 8 C39 13 36 18 29 21 Z" fill="#39e25a" />
+          <g stroke="#5df06f" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="19,26 13,32 19,38" />
+            <polyline points="29,26 35,32 29,38" />
+            <line x1="27" y1="25" x2="21" y2="39" />
+          </g>
+        </svg>
         <span className="text-sm font-semibold tracking-wide text-neutral-100">lokicode</span>
-        <span className="text-xs text-neutral-500">— VS Code-style editor with AI agent</span>
         <button
           onClick={() => setUpdateCheckNonce((n) => n + 1)}
           className="ml-auto rounded px-2 py-0.5 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
@@ -491,7 +493,11 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <ActivityBar view={sidebarView} onSelect={handleActivitySelect} />
 
-        {workspaceRoot ? (
+        {sidebarView === "settings" ? (
+          <aside className="w-72 shrink-0 border-r border-neutral-800">
+            <SettingsPane onSaved={() => setSettingsVersion((v) => v + 1)} />
+          </aside>
+        ) : workspaceRoot ? (
           // Keep both panes mounted so their data survives view switches
           // (no reload flicker); collapse to width 0 when the sidebar is hidden.
           <aside
@@ -503,7 +509,7 @@ export default function App() {
             <div className={sidebarView === "explorer" ? "h-full" : "hidden"}>
               <ExplorerPane
                 roots={workspaceRoots}
-                activePath={activeTab.path}
+                activePath={activeTab?.path ?? null}
                 onOpenFile={openPath}
                 onOpenFolder={handleOpenFolder}
                 onAddFolder={handleAddFolder}
@@ -581,6 +587,31 @@ export default function App() {
                 }}
                 onClose={() => setDiffTarget(null)}
               />
+            ) : !activeTab ? (
+              <div className="flex h-full flex-col items-center justify-center gap-5 bg-[#1e1e1e] text-neutral-500">
+                <div className="text-6xl opacity-25">📄</div>
+                <p className="text-sm">開いているファイルはありません</p>
+                <div className="flex gap-2 text-xs">
+                  <button
+                    onClick={handleNewTab}
+                    className="rounded bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-500"
+                  >
+                    新規ファイル
+                  </button>
+                  <button
+                    onClick={handleOpen}
+                    className="rounded border border-neutral-700 px-3 py-1.5 text-neutral-200 hover:bg-neutral-800"
+                  >
+                    ファイルを開く
+                  </button>
+                  <button
+                    onClick={handleOpenFolder}
+                    className="rounded border border-neutral-700 px-3 py-1.5 text-neutral-200 hover:bg-neutral-800"
+                  >
+                    フォルダを開く
+                  </button>
+                </div>
+              </div>
             ) : splitOn ? (
               <div className="flex h-full">
                 <div className="min-w-0 flex-1">
@@ -602,11 +633,11 @@ export default function App() {
                 <div className="min-w-0 flex-1">
                   <EditorPane
                     tabs={tabs}
-                    activeTab={rightTab}
+                    activeTab={rightTab ?? activeTab}
                     onSelectTab={setRightActiveId}
                     onCloseTab={handleCloseTab}
                     onNewTab={handleNewTab}
-                    onChange={(v) => updateTab(rightTab.id, { content: v, dirty: true })}
+                    onChange={(v) => updateTab((rightTab ?? activeTab).id, { content: v, dirty: true })}
                     onQuickAction={handleQuickAction}
                     onReorderTab={reorderTabs}
                     onTogglePin={togglePinTab}
@@ -646,11 +677,11 @@ export default function App() {
           >
             <ChatPane
               ref={chatRef}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={() => setSidebarView("settings")}
               settingsVersion={settingsVersion}
-              currentCode={activeTab.content}
-              currentFileName={activeTab.name}
-              currentFilePath={activeTab.path}
+              currentCode={activeTab?.content ?? ""}
+              currentFileName={activeTab?.name ?? "untitled"}
+              currentFilePath={activeTab?.path ?? null}
               workspaceRoot={workspaceRoot}
             />
           </div>
@@ -663,12 +694,6 @@ export default function App() {
           )}
         </div>
       </div>
-
-      <SettingsModal
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onSaved={() => setSettingsVersion((v) => v + 1)}
-      />
 
       <CommandPalette
         open={paletteOpen}
