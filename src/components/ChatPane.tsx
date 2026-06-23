@@ -22,7 +22,13 @@ import {
 } from "../lib/agent";
 import { runRecurrentReasoning, MAX_DEPTH, MAX_SAMPLES } from "../lib/reasoning";
 import { useModels } from "../lib/useModels";
-import { estimateDeepReasoningCost } from "../lib/cost";
+import {
+  estimateDeepReasoningCost,
+  approxTokens,
+  loadCalib,
+  recordCompletion,
+  recordToolRun,
+} from "../lib/cost";
 import { loadItems, saveItems, clearItems } from "../lib/chatStorage";
 import { usePersistentBool } from "../lib/usePersistentState";
 import Markdown from "./Markdown";
@@ -225,19 +231,23 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
 
   const { models } = useModels();
+  // Calibration learned from real usage; refreshed after each run.
+  const [calib, setCalib] = useState(() => loadCalib());
+  const callCountRef = useRef(0);
 
   // Approximate input tokens of the base prompt that will be sent (system +
-  // history + optional active file + the pending input).
+  // history + optional active file + the pending input). CJK-aware.
   const promptTokens = useMemo(() => {
-    let chars = input.length;
+    let tok = 180; // system prompt overhead
+    tok += approxTokens(input);
     for (const it of items) {
-      if (it.kind === "user" || it.kind === "assistant") chars += it.content.length;
+      if (it.kind === "user" || it.kind === "assistant") tok += approxTokens(it.content);
     }
-    if (includeFile) chars += currentCode.length;
-    return 200 + Math.ceil(chars / 3.5);
+    if (includeFile) tok += approxTokens(currentCode);
+    return tok;
   }, [items, input, includeFile, currentCode]);
 
-  // Rough pre-send cost estimate for deep-reasoning runs (shown by the depth slider).
+  // Pre-send cost estimate for deep-reasoning runs (shown by the depth slider).
   const costEstimate = useMemo(() => {
     const priceOf = (id: string) => {
       const m = models.find((x) => x.id === id);
@@ -250,8 +260,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       useTools: reasoningTools,
       thinking: priceOf(thinkingModel || model),
       synthesis: priceOf(synthesisModel || model),
+      calib,
     });
-  }, [models, promptTokens, depth, samples, reasoningTools, thinkingModel, synthesisModel, model]);
+  }, [models, promptTokens, depth, samples, reasoningTools, thinkingModel, synthesisModel, model, calib]);
 
   useImperativeHandle(ref, () => ({
     prefill(text: string) {
@@ -359,6 +370,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
 
   function addUsage(u: Usage) {
     setUsage((prev) => ({ tokens: prev.tokens + u.totalTokens, cost: prev.cost + u.cost }));
+    // Feed real output sizes into the cost calibration.
+    recordCompletion(u.completionTokens);
+    callCountRef.current += 1;
   }
 
   function handleClear() {
@@ -378,6 +392,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setError(null);
     setBusy(true);
     streamingRef.current = false;
+    callCountRef.current = 0;
     abortRef.current = { aborted: false };
     const signal = abortRef.current;
 
@@ -456,6 +471,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       if (signal.aborted) appendItem({ kind: "assistant", content: "_（停止しました）_" });
+      // Calibrate the tool multiplier from this run, then refresh the estimate.
+      if (deepReasoning && reasoningTools) {
+        recordToolRun(callCountRef.current, depth + 2);
+      }
+      setCalib(loadCalib());
       setBusy(false);
       setPending(null);
     }
@@ -623,6 +643,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
                     （約 {costEstimate.calls} 回の API 呼び出し想定{reasoningTools ? "・ツール込み" : ""}）
                   </span>
                 )}
+                {costEstimate.calibrated && <span className="text-emerald-600/80" title="過去の実使用量から補正済み">✓ 実測補正</span>}
               </div>
               <label
                 className="flex items-center gap-1.5"
