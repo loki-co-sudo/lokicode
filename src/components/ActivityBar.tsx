@@ -64,7 +64,7 @@ export default function ActivityBar({ view, onSelect }: ActivityBarProps) {
         onClick={() => onSelect("settings")}
         title="設定"
         className={
-          "mt-auto flex h-12 w-12 items-center justify-center border-l-2 transition-colors " +
+          "flex h-12 w-12 items-center justify-center border-l-2 transition-colors " +
           (view === "settings"
             ? "border-blue-400 text-neutral-100"
             : "border-transparent text-neutral-500 hover:text-neutral-200")

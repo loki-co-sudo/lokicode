@@ -219,6 +219,54 @@ function PlanCard({ item }: { item: Extract<AgentItem, { kind: "plan" }> }) {
   );
 }
 
+// Rotating, slightly whimsical status lines so a long pause never looks frozen.
+const THINKING_PHRASES = [
+  "思考を巡らせています",
+  "コードの海を探索中",
+  "次の一手を組み立てています",
+  "ニューロンを温めています",
+  "可能性を編んでいます",
+  "文脈を咀嚼しています",
+  "最善手を吟味中",
+  "点と点をつないでいます",
+];
+
+/**
+ * Shown while the agent is working. A breathing orb + shimmering phrase make it
+ * obviously *alive*, and a ticking elapsed clock proves progress isn't stalled.
+ * One 1s interval drives both (phrase rotates off the second count) — cheap, and
+ * it unmounts the moment work finishes, so nothing keeps running idle.
+ */
+function ThinkingIndicator({ note }: { note?: string }) {
+  const [sec, setSec] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setSec((s) => s + 1), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const phrase = note ?? THINKING_PHRASES[Math.floor(sec / 3) % THINKING_PHRASES.length];
+  const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+  const ss = String(sec % 60).padStart(2, "0");
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-neutral-800 bg-[#202022] px-3 py-2.5">
+      <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+        <span className="loki-breathe h-2.5 w-2.5 rounded-full bg-gradient-to-br from-emerald-400 to-blue-500" />
+        <span className="loki-orbit absolute inset-0 rounded-full border border-emerald-400/30 border-t-emerald-300/80" />
+      </span>
+      <span className="loki-shimmer min-w-0 flex-1 truncate text-[13px] font-medium">
+        {phrase}…
+      </span>
+      <span className="flex items-end gap-0.5" aria-hidden>
+        <span className="loki-dot h-1 w-1 rounded-full bg-neutral-500" style={{ animationDelay: "0ms" }} />
+        <span className="loki-dot h-1 w-1 rounded-full bg-neutral-500" style={{ animationDelay: "160ms" }} />
+        <span className="loki-dot h-1 w-1 rounded-full bg-neutral-500" style={{ animationDelay: "320ms" }} />
+      </span>
+      <span className="font-mono text-[11px] tabular-nums text-neutral-600">
+        {mm}:{ss}
+      </span>
+    </div>
+  );
+}
+
 function Toggle({
   checked,
   onChange,
@@ -885,36 +933,40 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           if (it.kind === "tool") return <ToolCard key={i} item={it} />;
           if (it.kind === "thought") return <ThoughtCard key={i} item={it} />;
           if (it.kind === "plan") return <PlanCard key={i} item={it} />;
-          const isUser = it.kind === "user";
-          return (
-            <div key={i} className={isUser ? "flex justify-end" : "flex justify-start"}>
-              <div
-                className={
-                  "group relative max-w-[85%] rounded-lg px-3 py-2 " +
-                  (isUser
-                    ? "whitespace-pre-wrap bg-blue-600 text-sm text-white"
-                    : "bg-neutral-800 text-neutral-100")
-                }
-              >
-                {!isUser && it.content && (
-                  <button
-                    onClick={() => navigator.clipboard.writeText(it.content).catch(() => {})}
-                    title="コピー"
-                    className="absolute right-1 top-1 rounded bg-neutral-700/80 px-1.5 py-0.5 text-[10px] text-neutral-300 opacity-0 transition hover:text-neutral-100 group-hover:opacity-100"
-                  >
-                    コピー
-                  </button>
-                )}
-                {isUser ? it.content : <Markdown content={it.content} />}
+          if (it.kind === "user") {
+            // Sender turn: a restrained, right-aligned chip — no loud bubble.
+            return (
+              <div key={i} className="flex justify-end">
+                <div className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-br-sm bg-[#2b2d31] px-3.5 py-2 text-[13px] leading-relaxed text-neutral-200 ring-1 ring-white/5">
+                  {it.content}
+                </div>
               </div>
+            );
+          }
+          // Agent turn: flows on the panel under a subtle identity line and a
+          // thread rail, rather than a chat bubble.
+          return (
+            <div key={i} className="group relative border-l border-neutral-800 pl-3">
+              <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-emerald-500/70">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/80" />
+                lokicode
+              </div>
+              <div className="text-neutral-100">
+                <Markdown content={it.content} />
+              </div>
+              {it.content && (
+                <button
+                  onClick={() => navigator.clipboard.writeText(it.content).catch(() => {})}
+                  title="コピー"
+                  className="absolute right-0 top-0 rounded bg-neutral-700/80 px-1.5 py-0.5 text-[10px] text-neutral-300 opacity-0 transition hover:text-neutral-100 group-hover:opacity-100"
+                >
+                  コピー
+                </button>
+              )}
             </div>
           );
         })}
-        {busy && !pending && (
-          <div className="flex justify-start">
-            <div className="rounded-lg bg-neutral-800 px-3 py-2 text-sm text-neutral-400">…</div>
-          </div>
-        )}
+        {busy && !pending && <ThinkingIndicator />}
         {error && (
           <div className="rounded-md border border-red-800/50 bg-red-950/40 px-3 py-2 text-xs text-red-300">
             {error}
