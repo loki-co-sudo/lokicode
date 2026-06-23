@@ -10,8 +10,7 @@ export interface ModelPrice {
   completionPrice: number;
 }
 
-const INSTR = 80; // reflect/synthesis instruction overhead (tokens)
-const NUDGE = 30; // draft nudge overhead
+const INSTR = 80; // per-call instruction/prompt overhead (tokens)
 const SYNTH_PREMIUM = 1.3; // synthesis output tends to be longer than thinking
 
 const DEFAULT_OUT = 700; // fallback avg output tokens/call before any calibration
@@ -114,26 +113,29 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
 
   const thinkOut = calib.outTokens;
   const synthOut = Math.round(calib.outTokens * SYNTH_PREMIUM);
-  const n = p.useTools ? 1 : Math.max(1, p.samples); // tools disable parallel sampling
-  const depth = Math.max(0, p.depth);
+  const breadth = Math.max(1, Math.min(5, Math.floor(p.samples))); // investigation angles
+  const depth = Math.max(0, p.depth); // verify/refine rounds
+  const mult = p.useTools ? calib.toolMult : 1;
 
-  const draftIn = p.promptTokens + NUDGE;
-  const reflectIn = p.promptTokens + thinkOut + INSTR;
+  // Structural call counts of the orchestrated pipeline (see lib/reasoning.ts):
+  //   plan (b>1) → investigate ×b (b>1) → draft → verify ×D → final.
+  const planCalls = breadth > 1 ? 1 : 0; // plain completion (no tool multiplier)
+  const investCalls = breadth > 1 ? breadth : 0; // thinking model
+  const verifyCalls = depth; // thinking model
+  const draftFinalCalls = 2; // synthesis model (draft + final)
 
-  // Thinking-model phases: drafts + reflections.
-  let thinkCost =
-    n * (draftIn * t.promptPrice + thinkOut * t.completionPrice) +
-    depth * (reflectIn * t.promptPrice + thinkOut * t.completionPrice);
-  if (p.useTools) thinkCost *= calib.toolMult;
+  const inTok = p.promptTokens + INSTR;
+  const thinkPer = inTok * t.promptPrice + thinkOut * t.completionPrice;
+  const synthPer = inTok * s.promptPrice + synthOut * s.completionPrice;
 
-  // Synthesis-model phases: optional aggregation (when sampling) + final synthesis.
-  const aggIn = p.promptTokens + n * thinkOut;
-  const synthIn = p.promptTokens + thinkOut + INSTR;
-  const synthCost =
-    (n > 1 ? aggIn * s.promptPrice + synthOut * s.completionPrice : 0) +
-    (synthIn * s.promptPrice + synthOut * s.completionPrice);
+  // Plan is a plain completion; draft/final and the thinking phases run as agent
+  // loops when tools are on, so they carry the tool-call multiplier.
+  const usd =
+    planCalls * synthPer +
+    draftFinalCalls * synthPer * mult +
+    (investCalls + verifyCalls) * thinkPer * mult;
 
-  const baseCalls = n + depth + (n > 1 ? 1 : 0) + 1;
-  const calls = p.useTools ? Math.round(baseCalls * calib.toolMult) : baseCalls;
-  return { usd: thinkCost + synthCost, calls, ok: true, calibrated: calib.samples > 0 };
+  const baseCalls = planCalls + investCalls + verifyCalls + draftFinalCalls;
+  const calls = p.useTools ? Math.round(baseCalls * mult) : baseCalls;
+  return { usd, calls, ok: true, calibrated: calib.samples > 0 };
 }

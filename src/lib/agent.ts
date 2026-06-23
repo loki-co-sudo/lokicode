@@ -157,6 +157,11 @@ export const TOOLS = [
   },
 ];
 
+/** Tools that cannot mutate the machine — safe to run without approval and to
+ * fan out in parallel. Used by the reasoning core's read-only investigation
+ * phase so grounded research never blocks on (or races over) approval prompts. */
+export const READ_ONLY_TOOLS = TOOLS.filter((t) => !RISKY_TOOLS.has(t.function.name));
+
 function truncate(text: string): string {
   if (text.length <= MAX_RESULT_CHARS) return text;
   return text.slice(0, MAX_RESULT_CHARS) + `\n…(${text.length - MAX_RESULT_CHARS} 文字省略)`;
@@ -255,6 +260,9 @@ export interface AgentOptions {
   /** Workspace root; default cwd for run_command and search root for grep_search. */
   workspaceRoot?: string;
   signal?: { aborted: boolean };
+  /** Restrict to read-only tools (no write_file/run_command): lets investigation
+   * phases run unattended and in parallel without approval prompts. */
+  readOnly?: boolean;
 }
 
 /**
@@ -277,7 +285,7 @@ export async function runAgent(
     let streamed = "";
     const { message: assistant, usage } = await chatOnceStream(
       conv,
-      TOOLS,
+      opts.readOnly ? READ_ONLY_TOOLS : TOOLS,
       opts.model,
       (chunk) => {
         streamed += chunk;
@@ -311,6 +319,18 @@ export async function runAgent(
         const todos = Array.isArray(args.todos) ? (args.todos as Todo[]) : [];
         cb.onPlan?.(todos);
         conv.push({ role: "tool", tool_call_id: call.id, content: "計画を更新しました。" });
+        continue;
+      }
+
+      // Read-only phase: refuse mutating tools without prompting.
+      if (opts.readOnly && RISKY_TOOLS.has(name)) {
+        cb.onToolStart({ name, args });
+        cb.onToolEnd("denied", "読み取り専用フェーズのため、この操作はスキップしました。");
+        conv.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: "読み取り専用の調査フェーズのため、この変更系ツールは実行できません。",
+        });
         continue;
       }
 

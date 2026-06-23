@@ -753,8 +753,12 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     } finally {
       if (signal.aborted) appendItem({ kind: "assistant", content: "_（停止しました）_" });
       // Calibrate the tool multiplier from this run, then refresh the estimate.
+      // Structural agent-loop count of the pipeline: investigate(b) + draft +
+      // verify(D) + final ≈ breadth + depth + 2 (plan is a plain completion).
       if (deepReasoning && agentMode) {
-        recordToolRun(callCountRef.current, depth + 2);
+        const breadth = Math.max(1, samples);
+        const structural = (breadth > 1 ? breadth : 0) + depth + 2;
+        recordToolRun(callCountRef.current, structural);
       }
       setCalib(loadCalib());
       setBusy(false);
@@ -1059,8 +1063,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
 
           {deepReasoning && (
             <>
-              <label className="flex items-center gap-1.5" title="内省（自己検証）の反復回数。多いほど高品質・高コスト">
-                思考深度
+              <label className="flex items-center gap-1.5" title="検証フェーズ（敵対的レビュー→改善）の反復回数。多いほど高品質・高コスト">
+                検証の深さ
                 <input
                   type="range"
                   min={1}
@@ -1073,17 +1077,16 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               </label>
               <label
                 className="flex items-center gap-1.5"
-                title="独立したドラフトを並列生成し、投票・統合して精度を上げます（self-consistency）。Agent モード時は無効"
+                title="課題を独立した観点に分解して並行調査する数。2 以上で「計画→多角調査→統合」を行い結論の質と網羅性が上がります（1 で分解なし）。Agent モードでは読み取り専用ツールで事実確認しながら調査します"
               >
-                サンプル数
+                調査の広さ
                 <input
                   type="range"
                   min={1}
                   max={MAX_SAMPLES}
                   value={samples}
                   onChange={(e) => setSamples(Number(e.target.value))}
-                  disabled={agentMode}
-                  className="accent-indigo-500 disabled:opacity-40"
+                  className="accent-indigo-500"
                 />
                 <span className="w-4 text-center font-mono text-indigo-300">{samples}</span>
               </label>
