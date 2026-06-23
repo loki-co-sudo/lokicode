@@ -174,6 +174,20 @@ export default function App() {
     [tabs],
   );
 
+  const handleQuickAction = useCallback(
+    (action: "explain" | "refactor" | "test", code: string, language: string) => {
+      const prompts: Record<typeof action, string> = {
+        explain: "次のコードを分かりやすく説明してください",
+        refactor: "次のコードをリファクタリングし、変更点を説明してください",
+        test: "次のコードのテストを書いてください",
+      };
+      setChatOpen(true);
+      const fence = language && language !== "plaintext" ? language : "";
+      chatRef.current?.prefill(`${prompts[action]}:\n\n\`\`\`${fence}\n${code}\n\`\`\``);
+    },
+    [setChatOpen],
+  );
+
   const openFolderPath = useCallback(
     (dir: string) => {
       setWorkspaceRoot(dir);
@@ -488,6 +502,7 @@ export default function App() {
                 onCloseTab={handleCloseTab}
                 onNewTab={handleNewTab}
                 onChange={handleChange}
+                onQuickAction={handleQuickAction}
                 theme={theme === "light" ? "light" : "dark"}
               />
             )}

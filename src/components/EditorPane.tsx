@@ -1,5 +1,9 @@
+import { useRef } from "react";
 import Editor from "@monaco-editor/react";
+import type { editor as MonacoEditor } from "monaco-editor";
 import type { Tab } from "../App";
+
+export type QuickAction = "explain" | "refactor" | "test";
 
 interface EditorPaneProps {
   tabs: Tab[];
@@ -8,6 +12,7 @@ interface EditorPaneProps {
   onCloseTab: (id: string) => void;
   onNewTab: () => void;
   onChange: (value: string) => void;
+  onQuickAction: (action: QuickAction, code: string, language: string) => void;
   theme: "dark" | "light";
 }
 
@@ -18,8 +23,23 @@ export default function EditorPane({
   onCloseTab,
   onNewTab,
   onChange,
+  onQuickAction,
   theme,
 }: EditorPaneProps) {
+  // Refs so the (once-registered) editor actions always see the latest props.
+  const qaRef = useRef(onQuickAction);
+  qaRef.current = onQuickAction;
+  const langRef = useRef(activeTab.language);
+  langRef.current = activeTab.language;
+
+  function runQuick(action: QuickAction, ed: MonacoEditor.ICodeEditor) {
+    const model = ed.getModel();
+    if (!model) return;
+    const sel = ed.getSelection();
+    const code = sel && !sel.isEmpty() ? model.getValueInRange(sel) : model.getValue();
+    if (code.trim()) qaRef.current(action, code, langRef.current);
+  }
+
   return (
     <div className="flex h-full flex-col bg-[#1e1e1e]">
       {/* Tabs bar */}
@@ -85,6 +105,22 @@ export default function EditorPane({
           path={activeTab.id}
           language={activeTab.language}
           value={activeTab.content}
+          onMount={(ed) => {
+            const items: { id: string; label: string; action: QuickAction; order: number }[] = [
+              { id: "loki.explain", label: "lokicode: 選択範囲を説明", action: "explain", order: 1.5 },
+              { id: "loki.refactor", label: "lokicode: リファクタリング", action: "refactor", order: 1.6 },
+              { id: "loki.test", label: "lokicode: テストを生成", action: "test", order: 1.7 },
+            ];
+            for (const it of items) {
+              ed.addAction({
+                id: it.id,
+                label: it.label,
+                contextMenuGroupId: "navigation",
+                contextMenuOrder: it.order,
+                run: (e) => runQuick(it.action, e),
+              });
+            }
+          }}
           onChange={(v) => onChange(v ?? "")}
           options={{
             fontSize: 14,

@@ -23,6 +23,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { joinPath } from "../lib/files";
+import { listFiles } from "../lib/search";
 import { runRecurrentReasoning, MAX_DEPTH, MAX_SAMPLES } from "../lib/reasoning";
 import { useModels } from "../lib/useModels";
 import {
@@ -269,6 +270,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [threads, setThreads] = useState<Thread[]>(() => listThreads());
   const [threadMenu, setThreadMenu] = useState(false);
   const [input, setInput] = useState("");
+
+  // @-mention: workspace file list + suggestion popup state.
+  const [wsFiles, setWsFiles] = useState<string[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(true);
@@ -317,6 +323,17 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const { models } = useModels();
   // Calibration learned from real usage; refreshed after each run.
   const [calib, setCalib] = useState(() => loadCalib());
+
+  // Workspace file list for @-mentions.
+  useEffect(() => {
+    if (!workspaceRoot) {
+      setWsFiles([]);
+      return;
+    }
+    listFiles(workspaceRoot)
+      .then(setWsFiles)
+      .catch(() => setWsFiles([]));
+  }, [workspaceRoot]);
 
   // Project-specific instructions loaded from <root>/.lokicode/rules(.md).
   const [rulesText, setRulesText] = useState("");
@@ -376,6 +393,12 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       calib,
     });
   }, [models, promptTokens, depth, samples, agentMode, thinkingModel, synthesisModel, model, calib]);
+
+  const mentionSuggestions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    return wsFiles.filter((f) => f.toLowerCase().includes(q)).slice(0, 8);
+  }, [mentionQuery, wsFiles]);
 
   useImperativeHandle(ref, () => ({
     prefill(text: string) {
@@ -553,6 +576,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setInput("");
     setError(null);
     setBusy(true);
+    setMentionQuery(null);
     streamingRef.current = false;
     callCountRef.current = 0;
     abortRef.current = { aborted: false };
@@ -566,6 +590,21 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         role: "system",
         content: `Current contents of the active file "${currentFileName}":\n\n\`\`\`\n${currentCode}\n\`\`\``,
       });
+    }
+    // Attach @-mentioned workspace files as context.
+    if (workspaceRoot) {
+      const mentioned = Array.from(
+        new Set((text.match(/@([^\s@]+)/g) ?? []).map((s) => s.slice(1))),
+      );
+      for (const rel of mentioned) {
+        if (!wsFiles.includes(rel)) continue;
+        try {
+          const c = await invoke<string>("read_text_file", { path: joinPath(workspaceRoot, rel) });
+          base.push({ role: "system", content: `Referenced file ${rel}:\n\`\`\`\n${c}\n\`\`\`` });
+        } catch {
+          /* unreadable — skip */
+        }
+      }
     }
     base.push(...history, { role: "user", content: text });
 
@@ -649,7 +688,56 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setPending(null);
   }
 
+  // Detect a trailing "@token" before the caret to drive the mention popup.
+  function handleInputChange(value: string) {
+    setInput(value);
+    const el = inputRef.current;
+    const pos = el?.selectionStart ?? value.length;
+    const m = value.slice(0, pos).match(/@([^\s@]*)$/);
+    if (m) {
+      setMentionQuery(m[1]);
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+    }
+  }
+
+  function insertMention(path: string) {
+    const el = inputRef.current;
+    const pos = el?.selectionStart ?? input.length;
+    const before = input.slice(0, pos).replace(/@([^\s@]*)$/, `@${path} `);
+    const next = before + input.slice(pos);
+    setInput(next);
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(before.length, before.length);
+    });
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (mentionQuery !== null && mentionSuggestions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((i) => Math.min(i + 1, mentionSuggestions.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        insertMention(mentionSuggestions[mentionIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -910,14 +998,37 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             </>
           )}
         </div>
-        <div className="flex items-end gap-2">
+        <div className="relative flex items-end gap-2">
+          {mentionQuery !== null && mentionSuggestions.length > 0 && (
+            <div className="absolute bottom-full left-0 z-50 mb-1 max-h-56 w-[28rem] max-w-full overflow-auto rounded-md border border-neutral-700 bg-[#252526] py-1 shadow-xl">
+              <div className="px-3 py-0.5 text-[10px] uppercase tracking-wide text-neutral-500">
+                ファイルを文脈に添付（@）
+              </div>
+              {mentionSuggestions.map((f, i) => (
+                <button
+                  key={f}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    insertMention(f);
+                  }}
+                  onMouseMove={() => setMentionIndex(i)}
+                  className={
+                    "block w-full truncate px-3 py-1 text-left text-xs " +
+                    (i === mentionIndex ? "bg-blue-600/30 text-neutral-100" : "text-neutral-300")
+                  }
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          )}
           <textarea
             ref={inputRef}
             className="min-h-[44px] max-h-40 flex-1 resize-none rounded-md border border-neutral-700 bg-[#2a2a2b] px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 outline-none focus:border-blue-500"
-            placeholder={agentMode ? "やりたいことを指示…（例: index.js に関数を追加して）" : "メッセージを入力…"}
+            placeholder={agentMode ? "やりたいことを指示…（@ でファイルを添付）" : "メッセージを入力…"}
             value={input}
             rows={1}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={busy}
           />
