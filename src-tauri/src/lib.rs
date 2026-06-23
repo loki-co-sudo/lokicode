@@ -44,9 +44,20 @@ struct CommandOutput {
 }
 
 /// Run a shell command (used by the agent's `run_command` tool). The frontend
-/// requires explicit user approval before invoking this.
+/// requires explicit user approval before invoking this. The command is killed if
+/// it exceeds `timeout_secs` (default 60) so a hanging process can't block forever.
 #[tauri::command]
-async fn run_command(command: String, cwd: Option<String>) -> Result<CommandOutput, String> {
+async fn run_command(
+    command: String,
+    cwd: Option<String>,
+    timeout_secs: Option<u64>,
+) -> Result<CommandOutput, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let timeout = Duration::from_secs(timeout_secs.unwrap_or(60).clamp(1, 600));
+
     let handle = tauri::async_runtime::spawn_blocking(move || {
         #[cfg(windows)]
         let mut cmd = {
@@ -64,13 +75,47 @@ async fn run_command(command: String, cwd: Option<String>) -> Result<CommandOutp
         if let Some(dir) = cwd.filter(|d| !d.trim().is_empty()) {
             cmd.current_dir(dir);
         }
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let output = cmd.output().map_err(|e| e.to_string())?;
-        Ok::<CommandOutput, String>(CommandOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            code: output.status.code().unwrap_or(-1),
-        })
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        // Drain pipes on threads so a full pipe buffer can't deadlock the wait.
+        let mut out_pipe = child.stdout.take().expect("piped stdout");
+        let mut err_pipe = child.stderr.take().expect("piped stderr");
+        let out_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = out_pipe.read_to_end(&mut buf);
+            buf
+        });
+        let err_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = err_pipe.read_to_end(&mut buf);
+            buf
+        });
+
+        let start = Instant::now();
+        let mut timed_out = false;
+        let code = loop {
+            match child.try_wait().map_err(|e| e.to_string())? {
+                Some(status) => break status.code().unwrap_or(-1),
+                None => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        timed_out = true;
+                        break -1;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&out_thread.join().unwrap_or_default()).to_string();
+        let mut stderr = String::from_utf8_lossy(&err_thread.join().unwrap_or_default()).to_string();
+        if timed_out {
+            stderr = format!("(タイムアウト {} 秒で強制終了しました)\n{}", timeout.as_secs(), stderr);
+        }
+
+        Ok::<CommandOutput, String>(CommandOutput { stdout, stderr, code })
     });
     handle.await.map_err(|e| e.to_string())?
 }

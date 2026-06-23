@@ -158,6 +158,7 @@ export async function runAgent(
     if (calls.length === 0) return; // final answer reached
 
     for (const call of calls) {
+      if (opts.signal?.aborted) return;
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(call.function.arguments || "{}");

@@ -160,6 +160,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [pending, setPending] = useState<PendingApproval | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
 
   useImperativeHandle(ref, () => ({
     prefill(text: string) {
@@ -232,6 +233,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setInput("");
     setError(null);
     setBusy(true);
+    abortRef.current = { aborted: false };
+    const signal = abortRef.current;
 
     const base: ApiMessage[] = [buildSystemPrompt(currentFileName, currentFilePath)];
     if (includeFile && currentCode.trim()) {
@@ -246,7 +249,12 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       if (deepReasoning) {
         await runRecurrentReasoning(
           base,
-          { depth, thinkingModel: thinkingModel || undefined, synthesisModel: synthesisModel || undefined },
+          {
+            depth,
+            thinkingModel: thinkingModel || undefined,
+            synthesisModel: synthesisModel || undefined,
+            signal,
+          },
           {
             onThought: (label, m, content) =>
               appendItem({ kind: "thought", label, model: m, content }),
@@ -264,7 +272,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             approve: (name, args) =>
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
           },
-          { autoApprove },
+          { autoApprove, signal },
         );
       } else {
         // Plain streaming chat (no tools).
@@ -287,9 +295,16 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      if (signal.aborted) appendItem({ kind: "assistant", content: "_（停止しました）_" });
       setBusy(false);
       setPending(null);
     }
+  }
+
+  function handleStop() {
+    abortRef.current.aborted = true;
+    pending?.resolve(false);
+    setPending(null);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -435,13 +450,22 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onKeyDown={handleKeyDown}
             disabled={busy}
           />
-          <button
-            onClick={handleSend}
-            disabled={busy || !input.trim()}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            送信
-          </button>
+          {busy ? (
+            <button
+              onClick={handleStop}
+              className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-500"
+            >
+              停止
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              送信
+            </button>
+          )}
         </div>
       </div>
     </div>

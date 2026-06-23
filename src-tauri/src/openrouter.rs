@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tauri::{ipc::Channel, AppHandle, Manager};
 
 const API_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL: &str = "anthropic/claude-3.5-sonnet";
+const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.6";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
