@@ -21,6 +21,7 @@ import {
   type Todo,
 } from "../lib/agent";
 import { invoke } from "@tauri-apps/api/core";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { joinPath } from "../lib/files";
 import { runRecurrentReasoning, MAX_DEPTH, MAX_SAMPLES } from "../lib/reasoning";
 import { useModels } from "../lib/useModels";
@@ -31,7 +32,17 @@ import {
   recordCompletion,
   recordToolRun,
 } from "../lib/cost";
-import { loadItems, saveItems, clearItems } from "../lib/chatStorage";
+import {
+  ensureActiveThread,
+  loadThread,
+  saveThread,
+  listThreads,
+  createThread,
+  renameThread,
+  deleteThread,
+  setActiveThreadId,
+  type Thread,
+} from "../lib/chatStorage";
 import { usePersistentBool } from "../lib/usePersistentState";
 import Markdown from "./Markdown";
 import ModelPicker from "./ModelPicker";
@@ -210,7 +221,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   { onOpenSettings, settingsVersion, currentCode, currentFileName, currentFilePath, workspaceRoot },
   ref,
 ) {
-  const [items, setItems] = useState<AgentItem[]>(() => loadItems());
+  const [threadId, setThreadId] = useState(() => ensureActiveThread());
+  const [items, setItems] = useState<AgentItem[]>(() => loadThread(threadId));
+  const [threads, setThreads] = useState<Thread[]>(() => listThreads());
+  const [threadMenu, setThreadMenu] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -233,9 +247,30 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   });
   const [pending, setPending] = useState<PendingApproval | null>(null);
   const [usage, setUsage] = useState({ tokens: 0, cost: 0 });
+  // Session cost cap in USD (0 = off). Warns / confirms before exceeding.
+  const [costLimit, setCostLimit] = useState<number>(() => {
+    const v = Number(localStorage.getItem("lokicode.costLimit"));
+    return v > 0 ? v : 0;
+  });
+  useEffect(() => {
+    localStorage.setItem("lokicode.costLimit", String(costLimit));
+  }, [costLimit]);
+  const overLimit = costLimit > 0 && usage.cost >= costLimit;
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
+  const threadMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!threadMenu) return;
+    function onDown(e: MouseEvent) {
+      if (threadMenuRef.current && !threadMenuRef.current.contains(e.target as Node)) {
+        setThreadMenu(false);
+      }
+    }
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [threadMenu]);
 
   const { models } = useModels();
   // Calibration learned from real usage; refreshed after each run.
@@ -319,8 +354,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   }, [settingsVersion]);
 
   useEffect(() => {
-    saveItems(items);
-  }, [items]);
+    saveThread(threadId, items);
+  }, [threadId, items]);
 
   useEffect(() => {
     localStorage.setItem("lokicode.depth", String(depth));
@@ -413,14 +448,63 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
 
   function handleClear() {
     setItems([]);
-    clearItems();
+    saveThread(threadId, []);
     setError(null);
     setUsage({ tokens: 0, cost: 0 });
+  }
+
+  function switchThread(id: string) {
+    setThreadMenu(false);
+    if (id === threadId) return;
+    setActiveThreadId(id);
+    setThreadId(id);
+    setItems(loadThread(id));
+    setThreads(listThreads());
+    setUsage({ tokens: 0, cost: 0 });
+    setError(null);
+  }
+
+  function newThread() {
+    const t = createThread();
+    setThreadMenu(false);
+    setThreadId(t.id);
+    setItems([]);
+    setThreads(listThreads());
+    setUsage({ tokens: 0, cost: 0 });
+    setError(null);
+  }
+
+  function renameCurrentThread() {
+    const cur = threads.find((t) => t.id === threadId);
+    const name = window.prompt("スレッド名", cur?.name ?? "");
+    if (name && name.trim()) {
+      renameThread(threadId, name.trim());
+      setThreads(listThreads());
+    }
+  }
+
+  function removeThread(id: string) {
+    const next = deleteThread(id);
+    setThreads(listThreads());
+    if (id === threadId) {
+      setThreadId(next);
+      setItems(loadThread(next));
+      setUsage({ tokens: 0, cost: 0 });
+    }
   }
 
   async function handleSend() {
     const text = input.trim();
     if (!text || busy) return;
+
+    // Cost cap: confirm before exceeding the configured session limit.
+    if (overLimit) {
+      const ok = await confirm(
+        `セッションの累計コストが上限 $${costLimit} を超えています（現在 $${usage.cost.toFixed(4)}）。続行しますか？`,
+        { title: "コスト上限", kind: "warning" },
+      );
+      if (!ok) return;
+    }
 
     const history = historyFromItems(items);
     appendItem({ kind: "user", content: text });
@@ -538,7 +622,49 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   return (
     <div className="flex h-full flex-col bg-[#1b1b1c]">
       <div className="flex items-center gap-2 border-b border-neutral-800 bg-[#252526] px-3 py-2">
-        <span className="text-sm font-medium text-neutral-200">AI Agent</span>
+        <div className="relative" ref={threadMenuRef}>
+          <button
+            onClick={() => setThreadMenu((v) => !v)}
+            title="会話スレッド"
+            className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </button>
+          {threadMenu && (
+            <div className="absolute left-0 top-full z-50 mt-1 max-h-80 w-64 overflow-auto rounded-md border border-neutral-700 bg-[#252526] py-1 shadow-xl">
+              {threads.map((t) => (
+                <div
+                  key={t.id}
+                  className={
+                    "group flex items-center gap-1 px-2 py-1 text-xs hover:bg-neutral-700 " +
+                    (t.id === threadId ? "text-blue-300" : "text-neutral-300")
+                  }
+                >
+                  <button onClick={() => switchThread(t.id)} className="min-w-0 flex-1 truncate text-left">
+                    {t.id === threadId ? "● " : ""}
+                    {t.name}
+                  </button>
+                  <button
+                    onClick={() => removeThread(t.id)}
+                    title="削除"
+                    className="rounded px-1 text-neutral-500 opacity-0 hover:text-red-400 group-hover:opacity-100"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <div className="my-1 border-t border-neutral-700" />
+              <button onClick={newThread} className="block w-full px-2 py-1 text-left text-xs text-emerald-400 hover:bg-neutral-700">
+                ＋ 新しい会話
+              </button>
+              <button onClick={renameCurrentThread} className="block w-full px-2 py-1 text-left text-xs text-neutral-400 hover:bg-neutral-700">
+                現在の会話の名前を変更
+              </button>
+            </div>
+          )}
+        </div>
         <ModelPicker value={model} onChange={handleModelChange} listId="header-models" align="right" className="min-w-0 flex-1" />
         <button onClick={handleClear} title="会話をクリア" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -553,10 +679,28 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         </button>
       </div>
 
-      {usage.tokens > 0 && (
-        <div className="flex justify-end gap-2 border-b border-neutral-800 bg-[#1f1f20] px-3 py-1 text-[11px] text-neutral-500">
+      {(usage.tokens > 0 || costLimit > 0) && (
+        <div
+          className={
+            "flex items-center justify-end gap-2 border-b border-neutral-800 px-3 py-1 text-[11px] " +
+            (overLimit ? "bg-red-950/40 text-red-300" : "bg-[#1f1f20] text-neutral-500")
+          }
+        >
+          {overLimit && <span className="mr-auto font-medium">⚠ コスト上限を超過</span>}
           <span>セッション使用量: {usage.tokens.toLocaleString()} tokens</span>
           {usage.cost > 0 && <span>· ${usage.cost.toFixed(4)}</span>}
+          <label className="flex items-center gap-0.5" title="累計コストがこの金額(USD)を超えると警告。0で無効">
+            <span className="text-neutral-600">/ 上限 $</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={costLimit || ""}
+              onChange={(e) => setCostLimit(Number(e.target.value) || 0)}
+              placeholder="0"
+              className="w-14 rounded border border-neutral-700 bg-[#2a2a2b] px-1 py-0.5 text-[11px] text-neutral-200 outline-none focus:border-blue-500"
+            />
+          </label>
         </div>
       )}
 
