@@ -150,6 +150,7 @@ pub fn run() {
             search::replace_in_files,
             terminal::terminal_start,
             terminal::terminal_write,
+            terminal::terminal_resize,
             terminal::terminal_kill,
             openrouter::list_models,
             openrouter::get_settings,

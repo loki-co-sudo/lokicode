@@ -1,96 +1,107 @@
-import { useEffect, useRef, useState } from "react";
-import { terminalStart, terminalWrite, terminalKill, onTerminalOutput } from "../lib/terminal";
-
-// Strip ANSI escape sequences (we render plain text, not a full TTY).
-// eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+import { useEffect, useRef } from "react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
+import {
+  terminalStart,
+  terminalWrite,
+  terminalResize,
+  terminalKill,
+  onTerminalOutput,
+  onTerminalExit,
+} from "../lib/terminal";
 
 interface TerminalPanelProps {
   cwd: string | null;
   onClose: () => void;
 }
 
-/** Basic integrated terminal: a persistent shell with streamed output. */
+// Decode base64 (raw PTY bytes) to a Uint8Array for xterm.write.
+function decode(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** Full PTY-backed terminal rendered with xterm.js (colors, TUIs, resize). */
 export default function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
-  const [output, setOutput] = useState("");
-  const [input, setInput] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    onTerminalOutput((chunk) => setOutput((o) => (o + chunk).slice(-100000))).then((un) => {
-      if (cancelled) un();
-      else unlisten = un;
+    const host = hostRef.current;
+    if (!host) return;
+
+    const term = new Terminal({
+      fontSize: 13,
+      fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", monospace',
+      cursorBlink: true,
+      theme: { background: "#121214", foreground: "#e5e5e5" },
     });
-    terminalStart(cwd).catch((e) =>
-      setOutput((o) => o + `\n[ターミナル起動エラー] ${e}\n`),
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(host);
+    fit.fit();
+
+    let unlistenOut: (() => void) | undefined;
+    let unlistenExit: (() => void) | undefined;
+    let disposed = false;
+
+    onTerminalOutput((b64) => term.write(decode(b64))).then((u) =>
+      disposed ? u() : (unlistenOut = u),
     );
+    onTerminalExit(() => {
+      term.write("\r\n\x1b[90m[プロセスが終了しました]\x1b[0m\r\n");
+    }).then((u) => (disposed ? u() : (unlistenExit = u)));
+
+    terminalStart(cwd, term.rows, term.cols).catch((e) =>
+      term.write(`\r\n[ターミナル起動エラー] ${e}\r\n`),
+    );
+
+    // Send user keystrokes to the PTY.
+    const dataDisp = term.onData((d) => {
+      terminalWrite(d).catch(() => {});
+    });
+
+    // Keep the PTY size in sync with the panel.
+    const ro = new ResizeObserver(() => {
+      try {
+        fit.fit();
+        terminalResize(term.rows, term.cols).catch(() => {});
+      } catch {
+        /* ignore transient layout */
+      }
+    });
+    ro.observe(host);
+
+    term.focus();
+
     return () => {
-      cancelled = true;
-      unlisten?.();
+      disposed = true;
+      ro.disconnect();
+      dataDisp.dispose();
+      unlistenOut?.();
+      unlistenExit?.();
       terminalKill().catch(() => {});
+      term.dispose();
     };
-    // Restart the shell when the workspace changes.
   }, [cwd]);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [output]);
-
-  function send() {
-    const line = input;
-    setOutput((o) => o + line + "\n"); // local echo (cmd /Q doesn't echo input)
-    terminalWrite(line + "\r\n").catch(() => {});
-    setInput("");
-  }
 
   return (
     <div className="flex h-full flex-col border-t border-neutral-800 bg-[#121214]">
       <div className="flex items-center gap-2 border-b border-neutral-800 bg-[#1b1b1c] px-2 py-1">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">ターミナル</span>
-        <button
-          onClick={() => setOutput("")}
-          title="クリア"
-          className="ml-auto rounded px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
-        >
-          クリア
-        </button>
+        <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+          ターミナル
+        </span>
         <button
           onClick={onClose}
           title="ターミナルを閉じる (Ctrl+J)"
-          className="rounded px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
+          className="ml-auto rounded px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
         >
           ✕
         </button>
       </div>
-
-      <div
-        ref={scrollRef}
-        onClick={() => inputRef.current?.focus()}
-        className="min-h-0 flex-1 overflow-auto px-2 py-1 font-mono text-[12px] leading-snug text-neutral-200"
-      >
-        <pre className="whitespace-pre-wrap break-all">{output.replace(ANSI, "")}</pre>
-        <div className="flex items-center gap-1">
-          <span className="text-emerald-400">›</span>
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                send();
-              }
-            }}
-            spellCheck={false}
-            autoComplete="off"
-            className="min-w-0 flex-1 bg-transparent font-mono text-[12px] text-neutral-100 outline-none"
-            placeholder="コマンドを入力して Enter…"
-          />
-        </div>
-      </div>
+      <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden px-1 py-0.5" />
     </div>
   );
 }

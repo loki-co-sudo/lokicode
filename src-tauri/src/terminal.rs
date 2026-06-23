@@ -1,10 +1,11 @@
-// Integrated terminal: a persistent shell process whose stdout/stderr are
-// streamed to the frontend via `terminal-output` events, with stdin fed by
-// `terminal_write`. Not a full PTY (no curses/interactive TUIs), but `cd`,
-// env and command output persist for the life of the session.
+// Integrated terminal backed by a real PTY (portable-pty), so colors and
+// interactive TUIs (vim, etc.) work. Raw PTY output is streamed to the frontend
+// as base64 over `terminal-output` events; xterm.js renders it. Input and resize
+// come back via `terminal_write` / `terminal_resize`.
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
@@ -13,80 +14,116 @@ pub struct TerminalState(pub Mutex<TerminalInner>);
 
 #[derive(Default)]
 pub struct TerminalInner {
-    stdin: Option<ChildStdin>,
-    child: Option<Child>,
+    writer: Option<Box<dyn Write + Send>>,
+    master: Option<Box<dyn MasterPty + Send>>,
+    child: Option<Box<dyn Child + Send + Sync>>,
 }
 
-fn spawn_reader(mut reader: impl Read + Send + 'static, app: AppHandle) {
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let _ = app.emit("terminal-output", text);
-                }
-            }
-        }
-    });
+fn shell() -> CommandBuilder {
+    #[cfg(windows)]
+    {
+        CommandBuilder::new("cmd.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        let sh = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
+        CommandBuilder::new(sh)
+    }
 }
 
-/// Start (or restart) the shell session in `cwd`.
+/// Start (or restart) a PTY shell session of the given size in `cwd`.
 #[tauri::command]
 pub fn terminal_start(
     app: AppHandle,
     state: State<TerminalState>,
     cwd: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
 ) -> Result<(), String> {
     let mut inner = state.0.lock().map_err(|e| e.to_string())?;
     if let Some(mut c) = inner.child.take() {
         let _ = c.kill();
     }
-    inner.stdin = None;
+    inner.writer = None;
+    inner.master = None;
 
-    #[cfg(windows)]
-    let mut cmd = {
-        let mut c = Command::new("cmd");
-        c.arg("/Q"); // no command echo
-        c
-    };
-    #[cfg(not(windows))]
-    let mut cmd = {
-        let mut c = Command::new("sh");
-        c.arg("-i");
-        c
-    };
+    let pty = portable_pty::native_pty_system();
+    let pair = pty
+        .openpty(PtySize {
+            rows: rows.unwrap_or(24),
+            cols: cols.unwrap_or(80),
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("PTY の作成に失敗しました: {e}"))?;
 
+    let mut cmd = shell();
     if let Some(dir) = cwd.filter(|d| !d.trim().is_empty()) {
-        cmd.current_dir(dir);
+        cmd.cwd(dir);
     }
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("シェルの起動に失敗しました: {e}"))?;
+    drop(pair.slave);
 
-    let mut child = cmd.spawn().map_err(|e| format!("シェルの起動に失敗しました: {e}"))?;
-    if let Some(out) = child.stdout.take() {
-        spawn_reader(out, app.clone());
-    }
-    if let Some(err) = child.stderr.take() {
-        spawn_reader(err, app.clone());
-    }
-    inner.stdin = child.stdin.take();
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("PTY の読み取り初期化に失敗しました: {e}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("PTY の書き込み初期化に失敗しました: {e}"))?;
+
+    // Stream raw PTY bytes (base64-encoded to survive the JSON event boundary).
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => {
+                    let _ = app2.emit("terminal-exit", ());
+                    break;
+                }
+                Ok(n) => {
+                    let _ = app2.emit("terminal-output", STANDARD.encode(&buf[..n]));
+                }
+            }
+        }
+    });
+
+    inner.writer = Some(writer);
+    inner.master = Some(pair.master);
     inner.child = Some(child);
     Ok(())
 }
 
-/// Write raw input (the frontend appends its own newline) to the shell's stdin.
 #[tauri::command]
 pub fn terminal_write(state: State<TerminalState>, data: String) -> Result<(), String> {
     let mut inner = state.0.lock().map_err(|e| e.to_string())?;
-    let stdin = inner
-        .stdin
+    let writer = inner
+        .writer
         .as_mut()
         .ok_or("ターミナルが起動していません。".to_string())?;
-    stdin.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    stdin.flush().map_err(|e| e.to_string())?;
+    writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn terminal_resize(state: State<TerminalState>, rows: u16, cols: u16) -> Result<(), String> {
+    let inner = state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(master) = inner.master.as_ref() {
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -96,6 +133,7 @@ pub fn terminal_kill(state: State<TerminalState>) -> Result<(), String> {
     if let Some(mut c) = inner.child.take() {
         let _ = c.kill();
     }
-    inner.stdin = None;
+    inner.writer = None;
+    inner.master = None;
     Ok(())
 }
