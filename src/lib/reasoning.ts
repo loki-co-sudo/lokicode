@@ -91,14 +91,32 @@ export async function runRecurrentReasoning(
 const sys = (content: string): ApiMessage => ({ role: "system", content });
 const usr = (content: string): ApiMessage => ({ role: "user", content });
 
-const PLANNER = (n: number) =>
-  sys(
-    `You are the lead researcher decomposing a task. Identify the few (at most ${n}) ` +
-      `MOST decision-relevant, INDEPENDENT investigation questions whose answers are ` +
-      `jointly sufficient to solve the task well. Avoid overlap; prefer questions ` +
-      `answerable from concrete evidence (code, files, command output). ` +
-      `Output ONLY the questions, one per line, each prefixed with "Q: ". No preamble, no numbering.`,
+// The strong model designs the whole answer up front: it fixes the INTENT and
+// the task-specific success CRITERIA (so the pipeline can't drift away from what
+// was actually asked), then the investigation QUESTIONS. This brief anchors every
+// later phase and the verifier's rubric.
+const BRIEF = (n: number) =>
+  usr(
+    "Before any research, act as the lead architect and DESIGN how to answer THIS request well. " +
+      "Output exactly these sections:\n" +
+      "GOAL: one or two sentences restating the user's true intent — the intended audience, the " +
+      "deliverable, and the expected level/format.\n" +
+      "CRITERIA: 3-6 bullets defining what a great answer MUST satisfy for THIS specific request " +
+      "(audience fit, framing, required depth, format, grounding). Make them concrete and task-" +
+      "specific — an answer can be technically correct yet still fail these.\n" +
+      (n > 1
+        ? `QUESTIONS: at most ${n} independent, decision-relevant investigation questions whose ` +
+          'answers are jointly sufficient to meet the GOAL. One per line, prefixed with "Q: ".'
+        : "(Do not list questions for this run.)"),
   );
+
+// Coverage gate: is the gathered evidence enough to meet the brief, or are there gaps?
+const SUFFICIENCY = usr(
+  "Assess whether the findings above are sufficient to write an answer that fully meets the GOAL " +
+    "and CRITERIA. Output ONLY minified JSON: " +
+    '{"sufficient": <true|false>, "gaps": ["specific missing fact to investigate", ...]} ' +
+    "(gaps = [] when sufficient; list at most 3, most important first).",
+);
 
 const INVESTIGATOR = sys(
   "You are investigating ONE sub-question of a larger task. Answer it precisely and " +
@@ -121,12 +139,14 @@ const DRAFT_PLAIN = usr(
 // LLM-as-judge: scores the draft against a rubric and lists concrete defects.
 // Runs as a plain completion (no tools) so the output is clean, parseable JSON.
 const JUDGE = usr(
-  "You are a strict evaluator. Judge the candidate answer above against the user's task and " +
-    "the gathered evidence. Score 0-100 with this rubric: factual grounding & correctness 40 " +
-    "(EVERY concrete claim must be supported by the evidence — any unsupported, evidence-" +
-    "contradicting, or internally inconsistent claim is a CRITICAL defect that caps the score " +
-    "at 50), depth / non-obvious insight 25 (penalize generic, surface-level answers), " +
-    "completeness 20, specificity & citations 15. " +
+  "You are a strict evaluator. Judge the candidate answer above against the user's task, the " +
+    "stated GOAL/CRITERIA, and the gathered evidence. Score 0-100 with this rubric: " +
+    "fit to GOAL & CRITERIA 35 (an answer that ignores the task-specific CRITERIA — e.g., wrong " +
+    "audience, framing, or format — is a major defect EVEN IF technically correct), " +
+    "factual grounding & correctness 35 (every concrete claim must be supported by the evidence; " +
+    "any unsupported, evidence-contradicting, or internally inconsistent claim is a CRITICAL " +
+    "defect that caps the score at 50), depth/insight appropriate to the audience 20, " +
+    "specificity & citations 10. " +
     'Output ONLY minified JSON: {"score": <int 0-100>, "defects": ["concrete issue, most ' +
     'important first", ...]} — use [] when there are no material defects.',
 );
@@ -147,11 +167,12 @@ const FINAL = (useTools: boolean) =>
     "You are the senior expert delivering the FINAL answer to the user. Before finalizing, " +
       "RE-VERIFY the key claims against the evidence" +
       (useTools ? " (use read-only tools to confirm anything uncertain)" : "") +
-      " and correct or remove anything unsupported, evidence-contradicting, or generic. Then " +
-      "deliver a decisive, specific and genuinely insightful response (not a surface tour): " +
-      "concrete strengths/risks with file:line evidence, honest uncertainties instead of " +
-      "blanket hedging, no filler or re-stating the question. Use Markdown, code in fenced " +
-      "blocks. Reply in the user's language.",
+      " and correct or remove anything unsupported, evidence-contradicting, or generic. " +
+      "The answer MUST satisfy the stated GOAL and CRITERIA (intended audience, framing and " +
+      "format) — not merely be technically correct. Then deliver a decisive, specific response " +
+      "pitched at the right level: ground key claims with file:line evidence, state honest " +
+      "uncertainties instead of blanket hedging, no filler or re-stating the question. Use " +
+      "Markdown, code in fenced blocks. Reply in the user's language.",
   );
 
 /** Parse the judge's JSON verdict; tolerant of stray prose around the JSON. */
@@ -170,6 +191,37 @@ function parseJudgment(text: string): { score: number; defects: string[] } {
   const sm = text.match(/score[^0-9]*(\d{1,3})/i);
   const score = sm ? Math.max(0, Math.min(100, Number(sm[1]))) : 60;
   return { score, defects: score >= 85 ? [] : ["（評価の解析に失敗。改善を継続）"] };
+}
+
+function parseBrief(
+  text: string,
+  maxQ: number,
+): { goal: string; criteria: string[]; questions: string[] } {
+  const goalM = text.match(/GOAL[:：]\s*([\s\S]*?)(?:\n\s*(?:CRITERIA|QUESTIONS|評価基準)\b|$)/i);
+  const goal = goalM ? goalM[1].trim().replace(/\s*\n+\s*/g, " ") : "";
+  const critM = text.match(/CRITERIA[:：]?\s*([\s\S]*?)(?:\n\s*QUESTIONS\b|$)/i);
+  const criteria = critM
+    ? critM[1]
+        .split(/\r?\n/)
+        .map((l) => l.replace(/^\s*[-*•\d.)]+\s*/, "").trim())
+        .filter((l) => l.length > 1)
+        .slice(0, 8)
+    : [];
+  return { goal, criteria, questions: parseQuestions(text, maxQ) };
+}
+
+function parseSufficiency(text: string): { sufficient: boolean; gaps: string[] } {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (m) {
+    try {
+      const o = JSON.parse(m[0]) as { sufficient?: unknown; gaps?: unknown };
+      const gaps = Array.isArray(o.gaps) ? o.gaps.map(String).filter(Boolean).slice(0, 3) : [];
+      return { sufficient: o.sufficient === true, gaps };
+    } catch {
+      /* fall through */
+    }
+  }
+  return { sufficient: true, gaps: [] }; // unparseable → don't block
 }
 
 function parseQuestions(text: string, max: number): string[] {
@@ -232,61 +284,98 @@ async function runOrchestratedReasoning(
     return content;
   };
 
-  // ── Phase A — Plan / decompose (only when breadth > 1) ──────────────────────
+  // ── Phase A — Solution brief (strong model designs intent + criteria + plan) ─
+  const briefText = await think([...base, BRIEF(breadth)], synthesis, { tools: false });
+  if (aborted()) return;
+  const brief = parseBrief(briefText, breadth);
+  cb.onThought("設計（ブリーフ）", synthLabel, briefText);
+  // The brief anchors every later phase: investigation, the verifier's rubric,
+  // and the final answer are all held accountable to this GOAL/CRITERIA.
+  const briefMsgs: ApiMessage[] =
+    brief.goal || brief.criteria.length
+      ? [
+          sys(
+            "このタスクの設計（最終回答は必ずこれを満たすこと）:\n" +
+              (brief.goal ? `GOAL: ${brief.goal}\n` : "") +
+              (brief.criteria.length
+                ? "CRITERIA:\n" + brief.criteria.map((c) => `- ${c}`).join("\n")
+                : ""),
+          ),
+        ]
+      : [];
+
+  // ── Phase B — Investigation (cheap model, read-only, grounded) ──────────────
+  const investigate = async (q: string, label: string): Promise<string> => {
+    const r = await think([...base, ...briefMsgs, INVESTIGATOR, usr(`Sub-question: ${q}`)], thinking, {
+      readOnly: true,
+    });
+    cb.onThought(label, thinkingLabel, r);
+    return `### 調査: ${q}\n${r}`;
+  };
+
   let evidence = "";
-  if (breadth > 1) {
-    const plan = await think([...base, PLANNER(breadth)], synthesis, { tools: false });
-    if (aborted()) return;
-    cb.onThought("調査計画", synthLabel, plan);
-    const questions = parseQuestions(plan, breadth);
-
-    if (questions.length >= 2) {
-      // ── Phase B — Investigation (read-only, grounded) ───────────────────────
-      const investigate = async (q: string, i: number): Promise<string> => {
-        const r = await think([...base, INVESTIGATOR, usr(`Sub-question: ${q}`)], thinking, {
-          readOnly: true,
-        });
-        cb.onThought(`調査 ${i + 1}/${questions.length}`, thinkingLabel, r);
-        return `### 調査: ${q}\n${r}`;
-      };
-
-      let findings: string[];
-      if (opts.useTools) {
-        // Serial when tools are on: keeps tool cards correctly ordered.
-        findings = [];
-        for (let i = 0; i < questions.length; i++) {
-          if (aborted()) return;
-          findings.push(await investigate(questions[i], i));
-        }
-      } else {
-        // Pure completions: safe and fast to run in parallel.
-        findings = await Promise.all(questions.map((q, i) => investigate(q, i)));
+  if (breadth > 1 && brief.questions.length >= 2) {
+    const qs = brief.questions;
+    let findings: string[];
+    if (opts.useTools) {
+      // Serial when tools are on: keeps tool cards correctly ordered.
+      findings = [];
+      for (let i = 0; i < qs.length; i++) {
+        if (aborted()) return;
+        findings.push(await investigate(qs[i], `調査 ${i + 1}/${qs.length}`));
       }
-      if (aborted()) return;
-      evidence = clip(findings.join("\n\n"), MAX_EVIDENCE_CHARS);
+    } else {
+      // Pure completions: safe and fast to run in parallel.
+      findings = await Promise.all(qs.map((q, i) => investigate(q, `調査 ${i + 1}/${qs.length}`)));
     }
+    if (aborted()) return;
+
+    // ── Phase B2 — Sufficiency gate: fill evidence gaps once before concluding ──
+    const provisional = clip(findings.join("\n\n"), MAX_EVIDENCE_CHARS);
+    const suffText = await think(
+      [...base, ...briefMsgs, sys(`収集された調査結果:\n\n${provisional}`), SUFFICIENCY],
+      thinking,
+      { tools: false },
+    );
+    if (aborted()) return;
+    const { sufficient, gaps } = parseSufficiency(suffText);
+    cb.onThought(
+      "十分性チェック",
+      thinkingLabel,
+      sufficient || gaps.length === 0
+        ? "証拠は十分と判断"
+        : "不足あり、追加調査します:\n" + gaps.map((g) => `- ${g}`).join("\n"),
+    );
+    if (!sufficient && gaps.length > 0) {
+      for (let i = 0; i < gaps.length; i++) {
+        if (aborted()) return;
+        findings.push(await investigate(gaps[i], `追加調査 ${i + 1}/${gaps.length}`));
+      }
+    }
+    evidence = clip(findings.join("\n\n"), MAX_EVIDENCE_CHARS);
   }
 
-  // ── Phase C — Draft (evidence-grounded when we have findings) ───────────────
+  // ── Phase C — Draft against the brief, grounded in the evidence ─────────────
   const evidenceMsgs: ApiMessage[] = evidence
     ? [sys(`収集された調査結果（根拠。以後の判断はこれを優先）:\n\n${evidence}`)]
     : [];
+  const ctx = [...briefMsgs, ...evidenceMsgs];
   let draft = await think(
-    [...base, ...evidenceMsgs, evidence ? DRAFT_FROM_EVIDENCE : DRAFT_PLAIN],
+    [...base, ...ctx, evidence ? DRAFT_FROM_EVIDENCE : DRAFT_PLAIN],
     synthesis,
     { readOnly: true },
   );
   if (aborted()) return;
   cb.onThought(evidence ? "統合ドラフト" : "初期ドラフト", synthLabel, draft);
 
-  // ── Phase D — Verifier-guided refine (adaptive depth + model escalation) ────
-  // An independent judge scores the draft each round; we stop early once it
-  // passes (real signal, not a self-claim), and escalate refinement to the
-  // strong model when the cheap model is stuck on a low score.
+  // ── Phase D — Verifier-guided refine (judge against the brief; adaptive) ────
+  // An independent judge scores the draft against the GOAL/CRITERIA each round;
+  // we stop early once it passes (real signal, not a self-claim), and escalate
+  // refinement to the strong model when the cheap model is stuck on a low score.
   for (let k = 1; k <= depth; k++) {
     if (aborted()) return;
     const verdict = await think(
-      [...base, ...evidenceMsgs, { role: "assistant", content: draft }, JUDGE],
+      [...base, ...ctx, { role: "assistant", content: draft }, JUDGE],
       thinking,
       { tools: false },
     );
@@ -302,7 +391,7 @@ async function runOrchestratedReasoning(
     const escalate = k >= Math.ceil(depth / 2) && score < ESCALATE_BELOW;
     const refineModel = escalate ? synthesis : thinking;
     draft = await think(
-      [...base, ...evidenceMsgs, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
+      [...base, ...ctx, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
       refineModel,
       { readOnly: true },
     );
@@ -314,9 +403,9 @@ async function runOrchestratedReasoning(
   }
   if (aborted()) return;
 
-  // ── Phase E — Final verify-and-finalize (strong model, read-only grounding) ──
+  // ── Phase E — Final: verify against the brief and finalize (strong model) ───
   const final = await think(
-    [...base, ...evidenceMsgs, { role: "assistant", content: draft }, FINAL(opts.useTools)],
+    [...base, ...ctx, { role: "assistant", content: draft }, FINAL(opts.useTools)],
     synthesis,
     { readOnly: true },
   );
