@@ -11,3 +11,16 @@ export function usePersistentBool(key: string, initial: boolean) {
   }, [key, value]);
   return [value, setValue] as const;
 }
+
+/** Nullable string state backed by localStorage (e.g. the open workspace path). */
+export function usePersistentString(key: string, initial: string | null) {
+  const [value, setValue] = useState<string | null>(() => {
+    const stored = localStorage.getItem(key);
+    return stored === null ? initial : stored;
+  });
+  useEffect(() => {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  }, [key, value]);
+  return [value, setValue] as const;
+}

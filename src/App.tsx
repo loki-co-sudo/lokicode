@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
+import { usePersistentBool, usePersistentString } from "./lib/usePersistentState";
 import EditorPane from "./components/EditorPane";
 import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
 import SettingsModal from "./components/SettingsModal";
@@ -59,10 +60,22 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsVersion, setSettingsVersion] = useState(0);
 
-  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
-  const [sidebarView, setSidebarView] = useState<SidebarView>(null);
+  // Remember the open workspace folder and which sidebar panel was shown,
+  // so they are restored on the next launch.
+  const [workspaceRoot, setWorkspaceRoot] = usePersistentString("lokicode.workspaceRoot", null);
+  const [sidebarView, setSidebarView] = useState<SidebarView>(() => {
+    const s = localStorage.getItem("lokicode.sidebarView");
+    return s === "explorer" || s === "git" ? s : null;
+  });
+  useEffect(() => {
+    if (sidebarView) localStorage.setItem("lokicode.sidebarView", sidebarView);
+    else localStorage.removeItem("lokicode.sidebarView");
+  }, [sidebarView]);
+
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
+  // Whether the right-hand AI Agent pane is shown (collapsible like the sidebar).
+  const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
 
   const [editorPct, setEditorPct] = useState(62);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -186,10 +199,14 @@ export default function App() {
     [tabs, activeId],
   );
 
-  const handleSendSelection = useCallback((code: string, language: string) => {
-    const fence = language && language !== "plaintext" ? language : "";
-    chatRef.current?.prefill(`以下のコードについて教えてください:\n\n\`\`\`${fence}\n${code}\n\`\`\``);
-  }, []);
+  const handleSendSelection = useCallback(
+    (code: string, language: string) => {
+      setChatOpen(true); // reveal the pane if it was collapsed
+      const fence = language && language !== "plaintext" ? language : "";
+      chatRef.current?.prefill(`以下のコードについて教えてください:\n\n\`\`\`${fence}\n${code}\n\`\`\``);
+    },
+    [setChatOpen],
+  );
 
   // Ctrl/Cmd+S to save the active tab.
   useEffect(() => {
@@ -233,6 +250,19 @@ export default function App() {
           title="更新を確認"
         >
           更新を確認
+        </button>
+        <button
+          onClick={() => setChatOpen((v) => !v)}
+          title={chatOpen ? "AI エージェントを隠す" : "AI エージェントを表示"}
+          className={
+            "rounded p-1 hover:bg-neutral-700 " +
+            (chatOpen ? "text-blue-400" : "text-neutral-400 hover:text-neutral-200")
+          }
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M15 4v16" />
+          </svg>
         </button>
       </header>
 
@@ -290,7 +320,7 @@ export default function App() {
           onMouseUp={stopDrag}
           onMouseLeave={stopDrag}
         >
-          <div style={{ width: `${editorPct}%` }} className="min-w-0">
+          <div style={{ width: chatOpen ? `${editorPct}%` : "100%" }} className="min-w-0">
             {diffTarget && workspaceRoot ? (
               <GitDiffView
                 root={workspaceRoot}
@@ -316,12 +346,18 @@ export default function App() {
             )}
           </div>
 
-          <div
-            onMouseDown={onMouseDown}
-            className="w-1 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-500"
-          />
+          {chatOpen && (
+            <div
+              onMouseDown={onMouseDown}
+              className="w-1 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-500"
+            />
+          )}
 
-          <div style={{ width: `${100 - editorPct}%` }} className="min-w-0">
+          {/* Kept mounted (hidden when collapsed) so chat state and "選択をAIへ" survive toggling. */}
+          <div
+            style={chatOpen ? { width: `${100 - editorPct}%` } : undefined}
+            className={chatOpen ? "min-w-0" : "hidden"}
+          >
             <ChatPane
               ref={chatRef}
               onOpenSettings={() => setSettingsOpen(true)}
