@@ -71,9 +71,22 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsVersion, setSettingsVersion] = useState(0);
 
-  // Remember the open workspace folder and which sidebar panel was shown,
-  // so they are restored on the next launch.
-  const [workspaceRoot, setWorkspaceRoot] = usePersistentString("lokicode.workspaceRoot", null);
+  // Open workspace folders (multi-root). The first is the "primary" root used by
+  // Git / search / terminal / the agent; the explorer shows them all.
+  const [workspaceRoots, setWorkspaceRoots] = useState<string[]>(() => {
+    try {
+      const arr = JSON.parse(localStorage.getItem("lokicode.workspaceRoots") ?? "null");
+      if (Array.isArray(arr)) return arr.filter((x) => typeof x === "string");
+    } catch {
+      /* fall through */
+    }
+    const old = localStorage.getItem("lokicode.workspaceRoot"); // migrate single-root
+    return old ? [old] : [];
+  });
+  useEffect(() => {
+    localStorage.setItem("lokicode.workspaceRoots", JSON.stringify(workspaceRoots));
+  }, [workspaceRoots]);
+  const workspaceRoot = workspaceRoots[0] ?? null;
   const [sidebarView, setSidebarView] = useState<SidebarView>(() => {
     const s = localStorage.getItem("lokicode.sidebarView");
     return s === "explorer" || s === "search" || s === "git" ? s : null;
@@ -218,19 +231,30 @@ export default function App() {
     [setChatOpen],
   );
 
-  const openFolderPath = useCallback(
-    (dir: string) => {
-      setWorkspaceRoot(dir);
-      setSidebarView("explorer");
-      addRecentFolder(dir);
-    },
-    [setWorkspaceRoot],
-  );
+  // Open a folder as the workspace (replaces the current set).
+  const openFolderPath = useCallback((dir: string) => {
+    setWorkspaceRoots([dir]);
+    setSidebarView("explorer");
+    addRecentFolder(dir);
+  }, []);
 
   const handleOpenFolder = useCallback(async () => {
     const dir = await openFolder();
     if (dir) openFolderPath(dir);
   }, [openFolderPath]);
+
+  // Add another folder to the multi-root workspace.
+  const handleAddFolder = useCallback(async () => {
+    const dir = await openFolder();
+    if (!dir) return;
+    setWorkspaceRoots((prev) => (prev.includes(dir) ? prev : [...prev, dir]));
+    setSidebarView("explorer");
+    addRecentFolder(dir);
+  }, []);
+
+  const removeRoot = useCallback((dir: string) => {
+    setWorkspaceRoots((prev) => prev.filter((r) => r !== dir));
+  }, []);
 
   const handleActivitySelect = useCallback((view: Exclude<SidebarView, null>) => {
     setSidebarView((cur) => (cur === view ? null : view));
@@ -478,10 +502,12 @@ export default function App() {
           >
             <div className={sidebarView === "explorer" ? "h-full" : "hidden"}>
               <ExplorerPane
-                root={workspaceRoot}
+                roots={workspaceRoots}
                 activePath={activeTab.path}
                 onOpenFile={openPath}
                 onOpenFolder={handleOpenFolder}
+                onAddFolder={handleAddFolder}
+                onRemoveRoot={removeRoot}
                 onClose={() => setSidebarView(null)}
               />
             </div>

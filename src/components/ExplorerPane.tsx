@@ -2,19 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { listDir, joinPath, fileNameFromPath, type DirEntry } from "../lib/files";
 import { gitStatus } from "../lib/git";
 
-/** Git status letter → text color (matches the Source Control pane). */
-function gitColor(letter: string): string {
-  if (letter === "D") return "text-red-400";
-  if (letter === "A" || letter === "?") return "text-emerald-400";
-  if (letter === "R") return "text-blue-400";
-  return "text-amber-400";
-}
-
-/** Repo-relative, forward-slash path of an absolute path under `root`. */
-function relPath(abs: string, root: string): string {
-  return abs.slice(root.length).replace(/^[\\/]+/, "").replace(/\\/g, "/");
-}
-
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
@@ -39,7 +26,6 @@ function FolderIcon({ open }: { open: boolean }) {
   );
 }
 
-// Light color hint by file category — keeps the tree scannable like VS Code.
 function fileColor(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (["ts", "tsx", "js", "jsx", "mjs", "cjs"].includes(ext)) return "#e2c08d";
@@ -58,6 +44,17 @@ function FileIcon({ name }: { name: string }) {
       <path d="M14 2v5h5" />
     </svg>
   );
+}
+
+function gitColor(letter: string): string {
+  if (letter === "D") return "text-red-400";
+  if (letter === "A" || letter === "?") return "text-emerald-400";
+  if (letter === "R") return "text-blue-400";
+  return "text-amber-400";
+}
+
+function relPath(abs: string, root: string): string {
+  return abs.slice(root.length).replace(/^[\\/]+/, "").replace(/\\/g, "/");
 }
 
 interface TreeNodeProps {
@@ -105,9 +102,7 @@ function TreeNode({ path, name, isDir, depth, root, activePath, gitMap, onOpenFi
         style={{ paddingLeft: depth * 12 + 6 }}
         className={
           "flex cursor-pointer items-center gap-1 py-[3px] pr-2 text-[13px] " +
-          (active
-            ? "bg-blue-600/25 text-neutral-100"
-            : "text-neutral-300 hover:bg-neutral-800")
+          (active ? "bg-blue-600/25 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800")
         }
       >
         <span className="flex w-3 shrink-0 justify-center text-neutral-500">
@@ -145,36 +140,30 @@ function TreeNode({ path, name, isDir, depth, root, activePath, gitMap, onOpenFi
   );
 }
 
-interface ExplorerPaneProps {
-  root: string;
-  activePath: string | null;
-  onOpenFile: (path: string) => void;
-  onOpenFolder: () => void;
-  onClose: () => void;
-}
-
-export default function ExplorerPane({
+/** One workspace root: collapsible header + its tree with Git status colors. */
+function RootSection({
   root,
   activePath,
+  removable,
   onOpenFile,
-  onOpenFolder,
-  onClose,
-}: ExplorerPaneProps) {
+  onRemove,
+}: {
+  root: string;
+  activePath: string | null;
+  removable: boolean;
+  onOpenFile: (path: string) => void;
+  onRemove: (root: string) => void;
+}) {
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
   const [gitMap, setGitMap] = useState<Map<string, string>>(new Map());
+  const [open, setOpen] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
     listDir(root)
-      .then((e) => !cancelled && setEntries(e))
-      .catch(() => !cancelled && setEntries([]));
-    return () => {
-      cancelled = true;
-    };
+      .then(setEntries)
+      .catch(() => setEntries([]));
   }, [root]);
 
-  // Load git status to color changed files. Refreshes when the active file
-  // changes (e.g. after a save) and on the refresh button.
   const reloadGit = useCallback(() => {
     gitStatus(root)
       .then((s) => {
@@ -192,19 +181,81 @@ export default function ExplorerPane({
   }, [reloadGit, activePath]);
 
   return (
+    <div className="mb-0.5">
+      <div className="group flex items-center gap-1 px-1 py-0.5">
+        <button onClick={() => setOpen((o) => !o)} className="flex min-w-0 flex-1 items-center gap-1" title={root}>
+          <span className="text-neutral-500">
+            <Chevron open={open} />
+          </span>
+          <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+            {fileNameFromPath(root) || root}
+          </span>
+        </button>
+        {removable && (
+          <button
+            onClick={() => onRemove(root)}
+            title="ワークスペースから除外"
+            className="rounded px-1 text-neutral-500 opacity-0 hover:text-neutral-200 group-hover:opacity-100"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {open && (
+        <div>
+          {entries === null && <div className="px-3 py-1 text-xs text-neutral-600">読み込み中…</div>}
+          {entries?.length === 0 && <div className="px-3 py-1 text-xs text-neutral-600">空のフォルダ</div>}
+          {entries?.map((e) => (
+            <TreeNode
+              key={e.name}
+              path={joinPath(root, e.name)}
+              name={e.name}
+              isDir={e.isDir}
+              depth={0}
+              root={root}
+              activePath={activePath}
+              gitMap={gitMap}
+              onOpenFile={onOpenFile}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ExplorerPaneProps {
+  roots: string[];
+  activePath: string | null;
+  onOpenFile: (path: string) => void;
+  onOpenFolder: () => void;
+  onAddFolder: () => void;
+  onRemoveRoot: (root: string) => void;
+  onClose: () => void;
+}
+
+export default function ExplorerPane({
+  roots,
+  activePath,
+  onOpenFile,
+  onOpenFolder,
+  onAddFolder,
+  onRemoveRoot,
+  onClose,
+}: ExplorerPaneProps) {
+  return (
     <div className="flex h-full flex-col bg-[#1b1b1c]">
       <div className="flex items-center justify-between border-b border-neutral-800 bg-[#252526] px-2 py-2">
-        <span className="truncate text-xs font-medium uppercase tracking-wide text-neutral-400" title={root}>
-          {fileNameFromPath(root) || root}
+        <span className="truncate text-xs font-medium uppercase tracking-wide text-neutral-400">
+          エクスプローラ
         </span>
         <span className="flex items-center gap-1">
-          <button onClick={reloadGit} title="Git 状態を更新" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
+          <button onClick={onAddFolder} title="フォルダをワークスペースに追加" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
-              <path d="M21 3v5h-5" />
+              <path d="M12 5v14M5 12h14" />
             </svg>
           </button>
-          <button onClick={onOpenFolder} title="別のフォルダを開く" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
+          <button onClick={onOpenFolder} title="フォルダを開く（置き換え）" className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 7h6l2 2h10v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
             </svg>
@@ -217,19 +268,14 @@ export default function ExplorerPane({
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto py-1">
-        {entries === null && <div className="px-3 py-1 text-xs text-neutral-600">読み込み中…</div>}
-        {entries?.length === 0 && <div className="px-3 py-1 text-xs text-neutral-600">空のフォルダ</div>}
-        {entries?.map((e) => (
-          <TreeNode
-            key={e.name}
-            path={joinPath(root, e.name)}
-            name={e.name}
-            isDir={e.isDir}
-            depth={0}
-            root={root}
+        {roots.map((r) => (
+          <RootSection
+            key={r}
+            root={r}
             activePath={activePath}
-            gitMap={gitMap}
+            removable={roots.length > 1}
             onOpenFile={onOpenFile}
+            onRemove={onRemoveRoot}
           />
         ))}
       </div>
