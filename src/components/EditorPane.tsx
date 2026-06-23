@@ -13,6 +13,8 @@ interface EditorPaneProps {
   onNewTab: () => void;
   onChange: (value: string) => void;
   onQuickAction: (action: QuickAction, code: string, language: string) => void;
+  onReorderTab: (fromId: string, toId: string) => void;
+  onTogglePin: (id: string) => void;
   theme: "dark" | "light";
 }
 
@@ -24,8 +26,11 @@ export default function EditorPane({
   onNewTab,
   onChange,
   onQuickAction,
+  onReorderTab,
+  onTogglePin,
   theme,
 }: EditorPaneProps) {
+  const dragIdRef = useRef<string | null>(null);
   // Refs so the (once-registered) editor actions always see the latest props.
   const qaRef = useRef(onQuickAction);
   qaRef.current = onQuickAction;
@@ -50,10 +55,18 @@ export default function EditorPane({
             return (
               <div
                 key={tab.id}
+                draggable
+                onDragStart={() => (dragIdRef.current = tab.id)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragIdRef.current) onReorderTab(dragIdRef.current, tab.id);
+                  dragIdRef.current = null;
+                }}
                 onClick={() => onSelectTab(tab.id)}
                 onMouseDown={(e) => {
-                  if (e.button === 1) {
-                    // middle-click closes the tab
+                  if (e.button === 1 && !tab.pinned) {
+                    // middle-click closes the tab (pinned tabs are protected)
                     e.preventDefault();
                     onCloseTab(tab.id);
                   }
@@ -64,8 +77,24 @@ export default function EditorPane({
                 }
                 title={tab.path ?? tab.name}
               >
-                <span className="whitespace-nowrap">{tab.name}</span>
-                <span className="flex h-4 w-4 items-center justify-center">
+                <span className="whitespace-nowrap">
+                  {tab.pinned && <span className="mr-1 text-blue-400">📌</span>}
+                  {tab.name}
+                </span>
+                <span className="flex h-4 items-center justify-center gap-1">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTogglePin(tab.id);
+                    }}
+                    title={tab.pinned ? "ピン留めを解除" : "ピン留め"}
+                    className={
+                      "rounded text-[10px] text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200 " +
+                      (tab.pinned ? "hidden" : "opacity-0 group-hover:opacity-100")
+                    }
+                  >
+                    📌
+                  </button>
                   {tab.dirty ? (
                     <span className="text-neutral-400 group-hover:hidden">●</span>
                   ) : null}

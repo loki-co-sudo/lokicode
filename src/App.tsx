@@ -33,6 +33,7 @@ export interface Tab {
   language: string;
   content: string;
   dirty: boolean;
+  pinned?: boolean;
 }
 
 const SAMPLE_CODE = `// index.js — sample file
@@ -121,6 +122,26 @@ export default function App() {
     },
     [activeId, updateTab],
   );
+
+  const reorderTabs = useCallback((fromId: string, toId: string) => {
+    setTabs((prev) => {
+      const from = prev.findIndex((t) => t.id === fromId);
+      const to = prev.findIndex((t) => t.id === toId);
+      if (from < 0 || to < 0 || from === to) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }, []);
+
+  const togglePinTab = useCallback((id: string) => {
+    setTabs((prev) => {
+      const updated = prev.map((t) => (t.id === id ? { ...t, pinned: !t.pinned } : t));
+      // Keep pinned tabs grouped at the front, preserving relative order.
+      return [...updated.filter((t) => t.pinned), ...updated.filter((t) => !t.pinned)];
+    });
+  }, []);
 
   const handleNewTab = useCallback(() => {
     const tab = createTab({ name: `untitled-${untitledCounter++}` });
@@ -503,6 +524,8 @@ export default function App() {
                 onNewTab={handleNewTab}
                 onChange={handleChange}
                 onQuickAction={handleQuickAction}
+                onReorderTab={reorderTabs}
+                onTogglePin={togglePinTab}
                 theme={theme === "light" ? "light" : "dark"}
               />
             )}
