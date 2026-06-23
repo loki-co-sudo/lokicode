@@ -61,6 +61,10 @@ export const MAX_SAMPLES = 5;
 const USE_ORCHESTRATOR = true;
 
 const MAX_EVIDENCE_CHARS = 9000;
+/** Verifier pass mark: stop refining once the judge scores at/above this. */
+const PASS_SCORE = 85;
+/** Below this (past the midpoint) the refine escalates to the strong model. */
+const ESCALATE_BELOW = 70;
 
 function clampDepth(d: number): number {
   return Math.max(1, Math.min(MAX_DEPTH, Math.floor(d)));
@@ -114,29 +118,59 @@ const DRAFT_PLAIN = usr(
   "Provide your best complete initial solution to the user's task, with concise, concrete reasoning.",
 );
 
-const CRITIC = (useTools: boolean) =>
+// LLM-as-judge: scores the draft against a rubric and lists concrete defects.
+// Runs as a plain completion (no tools) so the output is clean, parseable JSON.
+const JUDGE = usr(
+  "You are a strict evaluator. Judge the candidate answer above against the user's task and " +
+    "the gathered evidence. Score 0-100 with this rubric: factual grounding & correctness 40 " +
+    "(EVERY concrete claim must be supported by the evidence — any unsupported, evidence-" +
+    "contradicting, or internally inconsistent claim is a CRITICAL defect that caps the score " +
+    "at 50), depth / non-obvious insight 25 (penalize generic, surface-level answers), " +
+    "completeness 20, specificity & citations 15. " +
+    'Output ONLY minified JSON: {"score": <int 0-100>, "defects": ["concrete issue, most ' +
+    'important first", ...]} — use [] when there are no material defects.',
+);
+
+const REFINE = (defects: string[], useTools: boolean) =>
   usr(
-    "Act as a rigorous, skeptical reviewer. Audit the candidate answer above against the " +
-      "user's task" +
-      " and the gathered evidence" +
-      ". List concrete defects: unsupported or incorrect claims, missing cases, logical " +
-      "gaps, vague/generic reasoning, and better alternatives. " +
+    "Revise the answer above to fix EVERY issue listed below. Keep what is correct, deepen " +
+      "beyond the obvious, and ground claims in the evidence with file:line where useful. " +
       (useTools
-        ? "Use read-only tools to verify any suspicious claim (read files, grep, run read-only checks). "
+        ? "Verify anything you are not certain about with read-only tools (read/grep/list) BEFORE asserting it. "
         : "") +
-      "Then output an IMPROVED, complete, evidence-grounded answer that fixes every issue.\n" +
-      "If the answer is already correct, complete and well-supported with no material " +
-      "improvement possible, reply with `CONVERGED` on the very first line (optionally " +
-      "followed by the final answer).",
+      "Output ONLY the improved, complete answer — no preamble, no score.\n\nIssues to fix:\n" +
+      defects.map((d) => `- ${d}`).join("\n"),
   );
 
-const FINAL = usr(
-  "You are the senior expert delivering the FINAL answer to the user. Considering the full " +
-    "investigation and the refined draft, write the definitive response: decisive, specific " +
-    "and correct; ground key claims in evidence (cite file:line where useful); surface real " +
-    "uncertainties or risks honestly instead of hedging everything; no generic filler or " +
-    "re-stating the question. Use Markdown, with code in fenced blocks. Reply in the user's language.",
-);
+const FINAL = (useTools: boolean) =>
+  usr(
+    "You are the senior expert delivering the FINAL answer to the user. Before finalizing, " +
+      "RE-VERIFY the key claims against the evidence" +
+      (useTools ? " (use read-only tools to confirm anything uncertain)" : "") +
+      " and correct or remove anything unsupported, evidence-contradicting, or generic. Then " +
+      "deliver a decisive, specific and genuinely insightful response (not a surface tour): " +
+      "concrete strengths/risks with file:line evidence, honest uncertainties instead of " +
+      "blanket hedging, no filler or re-stating the question. Use Markdown, code in fenced " +
+      "blocks. Reply in the user's language.",
+  );
+
+/** Parse the judge's JSON verdict; tolerant of stray prose around the JSON. */
+function parseJudgment(text: string): { score: number; defects: string[] } {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (m) {
+    try {
+      const o = JSON.parse(m[0]) as { score?: unknown; defects?: unknown };
+      const score = Math.max(0, Math.min(100, Math.round(Number(o.score))));
+      const defects = Array.isArray(o.defects) ? o.defects.map(String).filter(Boolean) : [];
+      if (Number.isFinite(score)) return { score, defects };
+    } catch {
+      /* fall through to heuristic */
+    }
+  }
+  const sm = text.match(/score[^0-9]*(\d{1,3})/i);
+  const score = sm ? Math.max(0, Math.min(100, Number(sm[1]))) : 60;
+  return { score, defects: score >= 85 ? [] : ["（評価の解析に失敗。改善を継続）"] };
+}
 
 function parseQuestions(text: string, max: number): string[] {
   const lines = text.split(/\r?\n/).map((l) => l.trim());
@@ -245,27 +279,44 @@ async function runOrchestratedReasoning(
   if (aborted()) return;
   cb.onThought(evidence ? "統合ドラフト" : "初期ドラフト", synthLabel, draft);
 
-  // ── Phase D — Adversarial verify & refine (cheap model), CONVERGED early-stop ─
+  // ── Phase D — Verifier-guided refine (adaptive depth + model escalation) ────
+  // An independent judge scores the draft each round; we stop early once it
+  // passes (real signal, not a self-claim), and escalate refinement to the
+  // strong model when the cheap model is stuck on a low score.
   for (let k = 1; k <= depth; k++) {
     if (aborted()) return;
-    const reflected = await think(
-      [...base, ...evidenceMsgs, { role: "assistant", content: draft }, CRITIC(opts.useTools)],
+    const verdict = await think(
+      [...base, ...evidenceMsgs, { role: "assistant", content: draft }, JUDGE],
       thinking,
+      { tools: false },
     );
-    if (/^\s*CONVERGED\b/i.test(reflected)) {
-      const stripped = reflected.replace(/^\s*CONVERGED\b[ \t]*\n?/i, "").trim();
-      if (stripped.length > 40) draft = stripped;
-      cb.onThought(`収束（早期終了 ${k}/${depth}）`, thinkingLabel, draft);
-      break;
-    }
-    draft = reflected;
-    cb.onThought(`検証 ${k}/${depth}`, thinkingLabel, draft);
+    const { score, defects } = parseJudgment(verdict);
+    cb.onThought(
+      `検証 ${k}/${depth}（スコア ${score}）`,
+      thinkingLabel,
+      defects.length ? defects.map((d) => `- ${d}`).join("\n") : "重大な指摘なし",
+    );
+    if (score >= PASS_SCORE || defects.length === 0) break;
+    if (aborted()) return;
+
+    const escalate = k >= Math.ceil(depth / 2) && score < ESCALATE_BELOW;
+    const refineModel = escalate ? synthesis : thinking;
+    draft = await think(
+      [...base, ...evidenceMsgs, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
+      refineModel,
+      { readOnly: true },
+    );
+    cb.onThought(
+      `改善 ${k}/${depth}${escalate ? "（強モデルへ昇格）" : ""}`,
+      escalate ? synthLabel : thinkingLabel,
+      draft,
+    );
   }
   if (aborted()) return;
 
-  // ── Phase E — Final synthesis (strong model) ────────────────────────────────
+  // ── Phase E — Final verify-and-finalize (strong model, read-only grounding) ──
   const final = await think(
-    [...base, ...evidenceMsgs, { role: "assistant", content: draft }, FINAL],
+    [...base, ...evidenceMsgs, { role: "assistant", content: draft }, FINAL(opts.useTools)],
     synthesis,
     { readOnly: true },
   );
