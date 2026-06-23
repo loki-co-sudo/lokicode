@@ -29,6 +29,8 @@ export interface ReasoningCallbacks {
 export interface ReasoningOptions {
   /** Number of reflection iterations (1–16). */
   depth: number;
+  /** Number of independent drafts to generate in parallel and merge (1 = off). */
+  samples?: number;
   /** Cheap model for draft/reflection. Falls back to the default model. */
   thinkingModel?: string;
   /** Strong model for final synthesis. Falls back to the default model. */
@@ -40,6 +42,7 @@ export interface ReasoningOptions {
 }
 
 export const MAX_DEPTH = 16;
+export const MAX_SAMPLES = 5;
 
 const DRAFT_NUDGE: ApiMessage = {
   role: "system",
@@ -81,9 +84,33 @@ export async function runRecurrentReasoning(
     return content;
   };
 
-  // Phase 0 — draft (thinking model).
-  let draft = await think([...base, DRAFT_NUDGE], thinking);
-  cb.onThought("初期ドラフト", thinkingLabel, draft);
+  // Phase 0 — draft (thinking model). With self-consistency (samples > 1) we
+  // generate several independent drafts in parallel and merge them by "voting".
+  // Parallel sampling is skipped when tools are on (would race on approvals).
+  const samples = opts.useTools ? 1 : Math.max(1, Math.min(MAX_SAMPLES, Math.floor(opts.samples ?? 1)));
+  let draft: string;
+  if (samples > 1) {
+    const drafts = await Promise.all(
+      Array.from({ length: samples }, () => think([...base, DRAFT_NUDGE], thinking)),
+    );
+    if (opts.signal?.aborted) return;
+    drafts.forEach((d, i) => cb.onThought(`ドラフト候補 ${i + 1}/${samples}`, thinkingLabel, d));
+    const voteMessages: ApiMessage[] = [
+      ...base,
+      {
+        role: "user",
+        content:
+          "以下は同じ課題に対する複数の独立した解です。各案の正しさ・完全性を比較し、" +
+          "最も妥当な内容を採用・統合して、単一の最良の解にまとめてください。\n\n" +
+          drafts.map((d, i) => `### 案 ${i + 1}\n${d}`).join("\n\n"),
+      },
+    ];
+    draft = await think(voteMessages, synthesis ?? thinking);
+    cb.onThought("候補の統合（self-consistency）", synthesis || thinkingLabel, draft);
+  } else {
+    draft = await think([...base, DRAFT_NUDGE], thinking);
+    cb.onThought("初期ドラフト", thinkingLabel, draft);
+  }
 
   // Phase 1..D — reflect & refine (thinking model), with convergence early-stop.
   for (let k = 1; k <= depth; k++) {

@@ -19,7 +19,7 @@ import {
   type ToolStatus,
   type Todo,
 } from "../lib/agent";
-import { runRecurrentReasoning, MAX_DEPTH } from "../lib/reasoning";
+import { runRecurrentReasoning, MAX_DEPTH, MAX_SAMPLES } from "../lib/reasoning";
 import { loadItems, saveItems, clearItems } from "../lib/chatStorage";
 import { usePersistentBool } from "../lib/usePersistentState";
 import Markdown from "./Markdown";
@@ -211,6 +211,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     const v = Number(localStorage.getItem("lokicode.depth"));
     return v >= 1 && v <= MAX_DEPTH ? v : 4;
   });
+  const [samples, setSamples] = useState<number>(() => {
+    const v = Number(localStorage.getItem("lokicode.samples"));
+    return v >= 1 && v <= MAX_SAMPLES ? v : 1;
+  });
   const [pending, setPending] = useState<PendingApproval | null>(null);
   const [usage, setUsage] = useState({ tokens: 0, cost: 0 });
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -242,6 +246,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   useEffect(() => {
     localStorage.setItem("lokicode.depth", String(depth));
   }, [depth]);
+
+  useEffect(() => {
+    localStorage.setItem("lokicode.samples", String(samples));
+  }, [samples]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -358,6 +366,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           base,
           {
             depth,
+            samples,
             thinkingModel: thinkingModel || undefined,
             synthesisModel: synthesisModel || undefined,
             useTools: reasoningTools,
@@ -567,6 +576,22 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
                   className="accent-indigo-500"
                 />
                 <span className="w-5 text-center font-mono text-indigo-300">{depth}</span>
+              </label>
+              <label
+                className="flex items-center gap-1.5"
+                title="独立したドラフトを並列生成し、投票・統合して精度を上げます（self-consistency）。ツール使用時は無効"
+              >
+                サンプル数
+                <input
+                  type="range"
+                  min={1}
+                  max={MAX_SAMPLES}
+                  value={samples}
+                  onChange={(e) => setSamples(Number(e.target.value))}
+                  disabled={reasoningTools}
+                  className="accent-indigo-500 disabled:opacity-40"
+                />
+                <span className="w-4 text-center font-mono text-indigo-300">{samples}</span>
               </label>
               <label className="flex items-center gap-1.5" title="各思考フェーズでファイル読み書き・コマンド実行を許可（脳と手の融合）">
                 <input type="checkbox" checked={reasoningTools} onChange={(e) => setReasoningTools(e.target.checked)} className="accent-indigo-500" />
