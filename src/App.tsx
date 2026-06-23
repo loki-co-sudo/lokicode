@@ -85,6 +85,9 @@ export default function App() {
 
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [blamePath, setBlamePath] = useState<string | null>(null);
+  // Left/right split editor: a second group with its own active tab.
+  const [splitOn, setSplitOn] = useState(false);
+  const [rightActiveId, setRightActiveId] = useState<string | null>(null);
   const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
   // Whether the right-hand AI Agent pane is shown (collapsible like the sidebar).
   const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
@@ -116,6 +119,7 @@ export default function App() {
   const editorInstanceRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
+  const rightTab = tabs.find((t) => t.id === rightActiveId) ?? activeTab;
 
   const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -327,8 +331,16 @@ export default function App() {
           editorInstanceRef.current?.getAction("editor.action.quickOutline")?.run();
         },
       },
+      {
+        id: "split-editor",
+        title: "エディタの分割表示を切替",
+        run: () => {
+          setRightActiveId((r) => r ?? activeId);
+          setSplitOn((v) => !v);
+        },
+      },
     ],
-    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setAutoSave, setTheme, activeTab.path],
+    [handleOpenFolder, handleOpen, handleSave, handleNewTab, openPalette, setChatOpen, setTerminalOpen, setAutoSave, setTheme, activeTab.path, activeId],
   );
 
   // Configurable keyboard shortcuts (reloaded when settings change).
@@ -543,6 +555,40 @@ export default function App() {
                 }}
                 onClose={() => setDiffTarget(null)}
               />
+            ) : splitOn ? (
+              <div className="flex h-full">
+                <div className="min-w-0 flex-1">
+                  <EditorPane
+                    tabs={tabs}
+                    activeTab={activeTab}
+                    onSelectTab={setActiveId}
+                    onCloseTab={handleCloseTab}
+                    onNewTab={handleNewTab}
+                    onChange={handleChange}
+                    onQuickAction={handleQuickAction}
+                    onReorderTab={reorderTabs}
+                    onTogglePin={togglePinTab}
+                    onEditorReady={(ed) => (editorInstanceRef.current = ed)}
+                    theme={theme === "light" ? "light" : "dark"}
+                  />
+                </div>
+                <div className="w-px shrink-0 bg-neutral-800" />
+                <div className="min-w-0 flex-1">
+                  <EditorPane
+                    tabs={tabs}
+                    activeTab={rightTab}
+                    onSelectTab={setRightActiveId}
+                    onCloseTab={handleCloseTab}
+                    onNewTab={handleNewTab}
+                    onChange={(v) => updateTab(rightTab.id, { content: v, dirty: true })}
+                    onQuickAction={handleQuickAction}
+                    onReorderTab={reorderTabs}
+                    onTogglePin={togglePinTab}
+                    onEditorReady={() => {}}
+                    theme={theme === "light" ? "light" : "dark"}
+                  />
+                </div>
+              </div>
             ) : (
               <EditorPane
                 tabs={tabs}
