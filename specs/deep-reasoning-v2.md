@@ -186,3 +186,13 @@ v2.1 で「ジュニアエンジニア向けに解説して」を投げたら、
 ### 復元
 - セルフチェックはトグル OFF で無効。`ask_user` は `allowAskUser` を渡さなければ提示されない（コードで無効化するなら ChatPane の `allowAskUser: true` を外す）。制約・プロンプト追記を含む全体の取り消しは git で 0.24.0 を revert。`USE_ORCHESTRATOR=false` の v1 戻しは引き続き有効。
 - 将来枠（未実装）: 実行サブエージェント、`update_plan` を plan→execute→verify のステートマシンに昇格、構造的な再計画ループ。
+
+---
+
+## 11. コスト効率ルーティングの徹底（0.27.0）
+
+**動機**: synthesis に Sonnet 等を使うと 1 リクエスト ≈ $0.6 と高い。原因は**強モデルを3回**（ブリーフ・ドラフト・最終）使い、毎回大きな文脈を流していたこと。
+
+**変更（[reasoning.ts](../src/lib/reasoning.ts)）**: 最も高コストな単一生成である**ドラフトを廉価な thinking モデルに移動**。強モデル（synthesis）は **最終仕上げ（と検証器の昇格時）だけ**に限定。精度は既存の安全網——検証器スコア→低ければ強モデルへ昇格／最終は強モデルが事実再検証して仕上げ——で担保する。これで高コストな強モデル呼び出しが実質 3→1 に。`cost.ts` の概算も新ルーティングに合わせて更新。
+
+**復元**: ドラフトを強モデルへ戻すには [reasoning.ts](../src/lib/reasoning.ts) Phase C の `think(..., thinking, ...)` を `synthesis` に戻す（1 箇所）。全体の v1 戻しは `USE_ORCHESTRATOR=false`。

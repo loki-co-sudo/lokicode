@@ -369,17 +369,21 @@ async function runOrchestratedReasoning(
   }
 
   // ── Phase C — Draft against the brief, grounded in the evidence ─────────────
+  // Cost routing: the draft is the most expensive single generation, so it runs
+  // on the CHEAP thinking model. The strong model is reserved for the final
+  // synthesis (and for verifier escalations), which keeps quality while cutting
+  // the expensive calls from 3 → ~1.
   const evidenceMsgs: ApiMessage[] = evidence
     ? [sys(`収集された調査結果（根拠。以後の判断はこれを優先）:\n\n${evidence}`)]
     : [];
   const ctx = [...briefMsgs, ...evidenceMsgs];
   let draft = await think(
     [...base, ...ctx, evidence ? DRAFT_FROM_EVIDENCE : DRAFT_PLAIN],
-    synthesis,
+    thinking,
     { readOnly: true },
   );
   if (aborted()) return;
-  cb.onThought(evidence ? "統合ドラフト" : "初期ドラフト", synthLabel, draft);
+  cb.onThought(evidence ? "統合ドラフト" : "初期ドラフト", thinkingLabel, draft);
 
   // ── Phase D — Verifier-guided refine (judge against the brief; adaptive) ────
   // An independent judge scores the draft against the GOAL/CRITERIA each round;
