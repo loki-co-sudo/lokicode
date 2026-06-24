@@ -10,10 +10,10 @@ import {
   streamChat,
   complete,
   getSettings,
-  saveSettings,
   type ApiMessage,
   type ChatMessage,
   type Usage,
+  type ModelInfo,
 } from "../lib/openrouter";
 import {
   runAgent,
@@ -48,7 +48,6 @@ import {
 } from "../lib/chatStorage";
 import { usePersistentBool } from "../lib/usePersistentState";
 import Markdown from "./Markdown";
-import ModelPicker from "./ModelPicker";
 import DiffPreview from "./DiffPreview";
 
 interface ChatPaneProps {
@@ -70,6 +69,28 @@ interface PendingApproval {
   name: string;
   args: Record<string, unknown>;
   resolve: (ok: boolean) => void;
+}
+
+/** Pick the strongest FREE, tool-capable model from the live list — used as the
+ * default thinking model when the user hasn't chosen one. Prefers the highest
+ * Artificial Analysis intelligence index when available, else a curated order of
+ * known strong free reasoners. Tool support is required (investigation uses tools). */
+function pickFreeThinkingModel(models: ModelInfo[]): string {
+  const free = models.filter(
+    (m) => m.supportsTools && m.promptPrice === 0 && m.completionPrice === 0,
+  );
+  if (free.length === 0) return "";
+  const ranked = free.filter((m) => m.intelligenceIndex != null);
+  if (ranked.length > 0) {
+    ranked.sort((a, b) => (b.intelligenceIndex ?? 0) - (a.intelligenceIndex ?? 0));
+    return ranked[0].id;
+  }
+  const prefer = ["deepseek-r1", "deepseek-v3", "deepseek-chat", "qwen3", "qwq", "llama-3.3"];
+  for (const p of prefer) {
+    const hit = free.find((m) => m.id.toLowerCase().includes(p));
+    if (hit) return hit.id;
+  }
+  return free[0].id;
 }
 
 function buildSystemPrompt(
@@ -385,6 +406,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [error, setError] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(true);
   const [model, setModel] = useState("");
+  const [modelConfigured, setModelConfigured] = useState(true);
   const [thinkingModel, setThinkingModel] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("");
   const [includeFile, setIncludeFile] = usePersistentBool("lokicode.includeFile", false);
@@ -433,6 +455,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   }, [threadMenu]);
 
   const { models } = useModels();
+  // Default thinking model when the user hasn't picked one: strongest free,
+  // tool-capable model from the live list.
+  const autoFreeThinking = useMemo(() => pickFreeThinkingModel(models), [models]);
+  const effThinking = thinkingModel || autoFreeThinking;
   // Calibration learned from real usage; refreshed after each run.
   const [calib, setCalib] = useState(() => loadCalib());
 
@@ -500,7 +526,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       depth,
       samples,
       useTools: agentMode,
-      thinking: priceOf(thinkingModel || model),
+      thinking: priceOf(effThinking || model),
       synthesis: priceOf(synthesisModel || model),
       calib,
     });
@@ -524,6 +550,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       .then((s) => {
         setHasKey(s.hasKey);
         setModel(s.model);
+        setModelConfigured(s.modelConfigured);
         setThinkingModel(s.thinkingModel);
         setSynthesisModel(s.synthesisModel);
       })
@@ -628,15 +655,6 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     if (status === "done" && (lastToolRef.current === "write_file" || lastToolRef.current === "run_command")) {
       editedRef.current = true;
       scheduleFileRefresh();
-    }
-  }
-
-  async function handleModelChange(id: string) {
-    setModel(id);
-    try {
-      await saveSettings({ model: id });
-    } catch {
-      // ignore
     }
   }
 
@@ -779,7 +797,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           {
             depth,
             samples,
-            thinkingModel: thinkingModel || undefined,
+            thinkingModel: effThinking || undefined,
             synthesisModel: synthesisModel || undefined,
             useTools: agentMode,
             autoApprove,
@@ -1043,6 +1061,20 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         </div>
       )}
 
+      {hasKey && !modelConfigured && (
+        <div className="m-3 rounded-md border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+          AI モデルが未選択です（暫定で <span className="font-mono text-amber-200">{model}</span> を使用中）。
+          <button onClick={onOpenSettings} className="ml-1 underline hover:text-amber-200">
+            設定で選択
+          </button>
+          してください。ディープ推論の思考モデルは未設定の間、無料モデル
+          {autoFreeThinking && (
+            <>（<span className="font-mono text-amber-200">{autoFreeThinking}</span>）</>
+          )}
+          を自動使用します。
+        </div>
+      )}
+
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         {items.length === 0 && (
           <p className="mt-8 text-center text-sm text-neutral-600">
@@ -1176,17 +1208,6 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onChange={setIncludeFile}
             label="現在のファイルを文脈に含める"
           />
-
-          <div className="flex w-full items-center gap-1">
-            <span className="shrink-0 text-[11px] text-neutral-500">モデル</span>
-            <ModelPicker
-              value={model}
-              onChange={handleModelChange}
-              listId="chat-models"
-              placement="up"
-              className="min-w-0 flex-1"
-            />
-          </div>
 
           {deepReasoning && (
             <>

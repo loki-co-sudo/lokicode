@@ -114,6 +114,8 @@ fn resolve_model(app: &AppHandle) -> String {
 pub struct SettingsStatus {
     pub has_key: bool,
     pub model: String,
+    /// True when the user has explicitly chosen a default model (not the fallback).
+    pub model_configured: bool,
     /// "config" | "env" | "none" — where the active key comes from.
     pub key_source: String,
     /// Empty string if unset (falls back to `model`).
@@ -136,6 +138,7 @@ pub fn get_settings(app: AppHandle) -> SettingsStatus {
     SettingsStatus {
         has_key,
         model: resolve_model(&app),
+        model_configured: cfg.model.as_deref().is_some_and(|m| !m.trim().is_empty()),
         key_source: key_source.to_string(),
         thinking_model: cfg.thinking_model.unwrap_or_default(),
         synthesis_model: cfg.synthesis_model.unwrap_or_default(),

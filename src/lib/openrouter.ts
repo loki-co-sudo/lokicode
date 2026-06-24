@@ -81,6 +81,8 @@ export function chatOnceStream(
 export interface SettingsStatus {
   hasKey: boolean;
   model: string;
+  /** True when the user explicitly chose a default model (not the fallback). */
+  modelConfigured: boolean;
   keySource: "config" | "env" | "none";
   thinkingModel: string;
   synthesisModel: string;
