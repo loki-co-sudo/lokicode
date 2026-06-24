@@ -1,12 +1,14 @@
 {
   "name": "tauri-app",
   "private": true,
-  "version": "0.43.0",
+  "version": "0.44.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -37,6 +39,7 @@
     "sharp": "^0.35.2",
     "tailwindcss": "^4.3.1",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.9"
   }
 }
