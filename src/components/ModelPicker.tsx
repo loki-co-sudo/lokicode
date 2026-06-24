@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useModels } from "../lib/useModels";
 
 interface ModelPickerProps {
@@ -60,13 +61,57 @@ export default function ModelPicker({
   const [query, setQuery] = useState("");
   const [providers, setProviders] = useState<Set<string>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  // Fixed-position coords so the menu escapes any `overflow` ancestor (e.g. the
+  // settings pane) and always stays inside the viewport.
+  const [pos, setPos] = useState<{
+    left: number;
+    width: number;
+    maxH: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
 
-  // Close on outside click / Escape.
+  function place() {
+    const el = rootRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const width = Math.min(352, window.innerWidth - 16);
+    const spaceBelow = window.innerHeight - r.bottom;
+    const spaceAbove = r.top;
+    const up = placement === "up" || (spaceBelow < 320 && spaceAbove > spaceBelow);
+    const maxH = Math.min(416, (up ? spaceAbove : spaceBelow) - 12);
+    let left = align === "right" ? r.right - width : r.left;
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    setPos(
+      up
+        ? { left, width, maxH, bottom: window.innerHeight - r.top + 4 }
+        : { left, width, maxH, top: r.bottom + 4 },
+    );
+  }
+
+  // Position when opening, and keep it pinned to the trigger on scroll/resize.
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    const onMove = () => place();
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Close on outside click / Escape (the menu lives in a portal, so check both).
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
@@ -132,14 +177,21 @@ export default function ModelPicker({
         {loading ? "…" : "⟳"}
       </button>
 
-      {open && (
-        <div
-          className={
-            "absolute z-50 flex max-h-[26rem] w-[22rem] max-w-[min(90vw,22rem)] flex-col overflow-hidden rounded-md border border-neutral-700 bg-[#252526] shadow-xl " +
-            (placement === "up" ? "bottom-full mb-1 " : "top-full mt-1 ") +
-            (align === "right" ? "right-0" : "left-0")
-          }
-        >
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{
+              position: "fixed",
+              left: pos.left,
+              width: pos.width,
+              maxHeight: pos.maxH,
+              top: pos.top,
+              bottom: pos.bottom,
+            }}
+            className="z-[100] flex flex-col overflow-hidden rounded-md border border-neutral-700 bg-[#252526] shadow-xl"
+          >
           <div className="border-b border-neutral-800 p-2">
             <input
               ref={searchRef}
@@ -204,8 +256,9 @@ export default function ModelPicker({
           <div className="border-t border-neutral-800 px-2 py-1 text-[10px] text-neutral-600">
             {filtered.length} / {models.length} モデル
           </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
