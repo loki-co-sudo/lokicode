@@ -149,7 +149,9 @@ const JUDGE = usr(
     "stated CONSTRAINT is a CRITICAL defect), " +
     "factual grounding & correctness 35 (every concrete claim must be supported by the evidence; " +
     "any unsupported, evidence-contradicting, or internally inconsistent claim is a CRITICAL " +
-    "defect that caps the score at 50), depth/insight appropriate to the audience 20, " +
+    "defect that caps the score at 50 — this explicitly includes invented specific numbers/" +
+    "counts/versions, and describing a tool or feature as doing something its implementation does " +
+    "not), depth/insight appropriate to the audience 20, " +
     "specificity & citations 10. " +
     'Output ONLY minified JSON: {"score": <int 0-100>, "defects": ["concrete issue, most ' +
     'important first", ...]} — use [] when there are no material defects.',
@@ -176,7 +178,10 @@ const FINAL = (useTools: boolean) =>
       "format) and respect every CONSTRAINT — not merely be technically correct. Then deliver a " +
       "decisive, specific response " +
       "pitched at the right level: ground key claims with file:line evidence, state honest " +
-      "uncertainties instead of blanket hedging, no filler or re-stating the question. Use " +
+      "uncertainties instead of blanket hedging, no filler or re-stating the question. " +
+      "Describe each tool/feature EXACTLY as the evidence shows and do not invent specific " +
+      "numbers, counts, versions or capabilities (e.g. an exact count of supported models, or a " +
+      "tool that reads files when its implementation does not). Use " +
       "Markdown, code in fenced blocks. Reply in the user's language.",
   );
 
