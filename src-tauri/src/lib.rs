@@ -79,8 +79,12 @@ async fn run_command(
     let handle = tauri::async_runtime::spawn_blocking(move || {
         #[cfg(windows)]
         let mut cmd = {
+            use std::os::windows::process::CommandExt;
             let mut c = std::process::Command::new("cmd");
             c.args(["/C", &command]);
+            // CREATE_NO_WINDOW: run hidden so no console window pops up; output is
+            // still captured via the pipes and shown in the chat tool card.
+            c.creation_flags(0x0800_0000);
             c
         };
         #[cfg(not(windows))]
