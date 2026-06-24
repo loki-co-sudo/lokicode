@@ -65,6 +65,10 @@ const MAX_EVIDENCE_CHARS = 9000;
 const PASS_SCORE = 85;
 /** Below this (past the midpoint) the refine escalates to the strong model. */
 const ESCALATE_BELOW = 70;
+/** Ensemble width (Mixture-of-Agents): parallel proposer drafts / final
+ * candidates. Kept small (2) so latency stays ~flat — the samples run in
+ * parallel — while diversity cancels uncorrelated errors. */
+const ENSEMBLE_SAMPLES = 2;
 
 function clampDepth(d: number): number {
   return Math.max(1, Math.min(MAX_DEPTH, Math.floor(d)));
@@ -185,6 +189,23 @@ const FINAL = (useTools: boolean) =>
       "Markdown, code in fenced blocks. Reply in the user's language.",
   );
 
+// Mixture-of-Agents: merge several independent proposer drafts into one.
+const AGGREGATE = usr(
+  "The candidate drafts above were generated independently. Synthesize them into ONE best draft: " +
+    "keep the correct and insightful parts, discard errors, unsupported claims and contradictions, " +
+    "and satisfy the GOAL/CRITERIA. Output ONLY the merged draft.",
+);
+
+// best-of-N selection by the strong model acting as verifier.
+const SELECT = usr(
+  "The candidate FINAL answers above were generated independently. Acting as a strict verifier, " +
+    "output the single best answer: choose the strongest, then improve it by folding in any " +
+    "superior, well-grounded points from the others and removing anything unsupported, off-brief, " +
+    "or that violates a CONSTRAINT. The result MUST satisfy the GOAL/CRITERIA. Describe tools/" +
+    "features exactly as the evidence shows; invent no specific numbers or capabilities. Output " +
+    "ONLY the final answer (Markdown, in the user's language).",
+);
+
 /** Parse the judge's JSON verdict; tolerant of stray prose around the JSON. */
 function parseJudgment(text: string): { score: number; defects: string[] } {
   const m = text.match(/\{[\s\S]*\}/);
@@ -270,6 +291,9 @@ async function runOrchestratedReasoning(
   const thinkingLabel = thinking || "(default)";
   const synthLabel = synthesis || thinkingLabel;
   const aborted = () => opts.signal?.aborted === true;
+  // Spend the extra ensemble passes only when the task is non-trivial (the user
+  // asked for breadth or depth); simple runs stay single-pass and fast.
+  const ensemble = breadth > 1 || depth >= 3;
 
   // A reasoning step: a tool-using agent mini-loop when useTools, else a plain
   // completion. `tools:false` forces a plain completion even in tool mode (for
@@ -382,13 +406,35 @@ async function runOrchestratedReasoning(
     ? [sys(`収集された調査結果（根拠。以後の判断はこれを優先）:\n\n${evidence}`)]
     : [];
   const ctx = [...briefMsgs, ...evidenceMsgs];
-  let draft = await think(
-    [...base, ...ctx, evidence ? DRAFT_FROM_EVIDENCE : DRAFT_PLAIN],
-    thinking,
-    { readOnly: true },
-  );
+  const draftInstr = evidence ? DRAFT_FROM_EVIDENCE : DRAFT_PLAIN;
+  let draft: string;
+  if (ensemble) {
+    // Mixture-of-Agents: several independent drafts (parallel, plain) → merge.
+    const proposals = await Promise.all(
+      Array.from({ length: ENSEMBLE_SAMPLES }, () =>
+        think([...base, ...ctx, draftInstr], thinking, { tools: false }),
+      ),
+    );
+    if (aborted()) return;
+    proposals.forEach((p, i) =>
+      cb.onThought(`ドラフト案 ${i + 1}/${ENSEMBLE_SAMPLES}`, thinkingLabel, p),
+    );
+    const merged = [
+      ...base,
+      ...ctx,
+      sys(
+        "以下は独立に生成した候補ドラフトです:\n\n" +
+          proposals.map((p, i) => `### 案 ${i + 1}\n${p}`).join("\n\n"),
+      ),
+      AGGREGATE,
+    ];
+    draft = await think(merged, thinking, { tools: false });
+    cb.onThought("ドラフト統合（MoA）", thinkingLabel, draft);
+  } else {
+    draft = await think([...base, ...ctx, draftInstr], thinking, { readOnly: true });
+    cb.onThought(evidence ? "統合ドラフト" : "初期ドラフト", thinkingLabel, draft);
+  }
   if (aborted()) return;
-  cb.onThought(evidence ? "統合ドラフト" : "初期ドラフト", thinkingLabel, draft);
 
   // ── Phase D — Verifier-guided refine (judge against the brief; adaptive) ────
   // An independent judge scores the draft against the GOAL/CRITERIA each round;
@@ -425,13 +471,42 @@ async function runOrchestratedReasoning(
   }
   if (aborted()) return;
 
-  // ── Phase E — Final: verify against the brief and finalize (strong model) ───
-  const final = await think(
-    [...base, ...ctx, { role: "assistant", content: draft }, FINAL(opts.useTools)],
-    synthesis,
-    { readOnly: true },
-  );
-  cb.onFinal(final);
+  // ── Phase E — Final (strong model). On non-trivial tasks: best-of-N with the
+  // strong model selecting/merging the best candidate (verifier selection). ────
+  if (ensemble) {
+    const candidates = await Promise.all(
+      Array.from({ length: ENSEMBLE_SAMPLES }, () =>
+        think([...base, ...ctx, { role: "assistant", content: draft }, FINAL(false)], synthesis, {
+          tools: false,
+        }),
+      ),
+    );
+    if (aborted()) return;
+    candidates.forEach((c, i) =>
+      cb.onThought(`最終候補 ${i + 1}/${ENSEMBLE_SAMPLES}`, synthLabel, c),
+    );
+    const final = await think(
+      [
+        ...base,
+        ...ctx,
+        sys(
+          "以下は独立に生成した最終回答の候補です:\n\n" +
+            candidates.map((c, i) => `### 候補 ${i + 1}\n${c}`).join("\n\n"),
+        ),
+        SELECT,
+      ],
+      synthesis,
+      { tools: false },
+    );
+    cb.onFinal(final);
+  } else {
+    const final = await think(
+      [...base, ...ctx, { role: "assistant", content: draft }, FINAL(opts.useTools)],
+      synthesis,
+      { readOnly: true },
+    );
+    cb.onFinal(final);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

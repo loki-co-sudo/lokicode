@@ -196,3 +196,20 @@ v2.1 で「ジュニアエンジニア向けに解説して」を投げたら、
 **変更（[reasoning.ts](../src/lib/reasoning.ts)）**: 最も高コストな単一生成である**ドラフトを廉価な thinking モデルに移動**。強モデル（synthesis）は **最終仕上げ（と検証器の昇格時）だけ**に限定。精度は既存の安全網——検証器スコア→低ければ強モデルへ昇格／最終は強モデルが事実再検証して仕上げ——で担保する。これで高コストな強モデル呼び出しが実質 3→1 に。`cost.ts` の概算も新ルーティングに合わせて更新。
 
 **復元**: ドラフトを強モデルへ戻すには [reasoning.ts](../src/lib/reasoning.ts) Phase C の `think(..., thinking, ...)` を `synthesis` に戻す（1 箇所）。全体の v1 戻しは `USE_ORCHESTRATOR=false`。
+
+---
+
+## 12. アンサンブル（Mixture-of-Agents + best-of-N 検証選抜）（0.28.0）
+
+**狙い**: 廉価モデルでも frontier 級に近づける。研究的根拠は **Mixture-of-Agents (MoA)**（複数の安価モデル/サンプルを多層協調させると単体強モデルに匹敵）＋ **self-consistency / verifier 選抜**。
+
+**実装（[reasoning.ts](../src/lib/reasoning.ts)）** — 「重くしない」ため**並列実行**で latency をほぼ据え置き、簡単な課題では自動スキップ：
+- **MoA ドラフト（Phase C）**: 廉価モデルで `ENSEMBLE_SAMPLES`(=2) 案を**並列生成**→1 回で統合（plain）。多様性で相関しない誤りを相殺。
+- **best-of-N 最終（Phase E）**: 強モデルで候補を**並列生成**→**強モデルが検証者として最良を選抜・統合**（SELECT）。
+- **難易度ゲート**: `ensemble = breadth > 1 || depth >= 3` のときだけ実行。軽い deep 実行（広さ1・深さ<3）は従来の単発で高速。
+- 並列フェーズは全て `tools:false`（plain）にして、並列ツールカードの錯綜・承認競合を回避。
+- `cost.ts` の概算もアンサンブル分（proposers+merge、candidates+select）を反映。
+
+**コスト/速度**: 並列なので体感速度はほぼ同じ。コストは draft/final 段が数倍になるが、ドラフトは廉価モデル、最終のみ強モデル数本で、Claude 単体（$0.6）より安い水準を維持。
+
+**復元/調整**: `ENSEMBLE_SAMPLES=1` で実質アンサンブル無効化（単発に近づく）。ゲート条件 `ensemble` を `false` 固定で完全オフ。全体 v1 戻しは `USE_ORCHESTRATOR=false`。

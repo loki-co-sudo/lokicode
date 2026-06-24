@@ -119,34 +119,42 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
 
   // Structural call counts of the orchestrated pipeline (see lib/reasoning.ts):
   //   brief(strong) → investigate ×b + sufficiency (cheap, b>1)
-  //   → draft(cheap) → judge ×D + refine ×D (cheap, refine may escalate)
-  //   → final(strong). Only brief and final use the strong model now.
+  //   → draft(cheap) → judge ×D + refine ×D (cheap) → final(strong).
+  // On non-trivial tasks (ensemble) the draft and final become Mixture-of-Agents:
+  //   draft = N proposers + 1 merge (cheap, plain);
+  //   final = N candidates + 1 select (strong, plain).
+  const ensemble = breadth > 1 || depth >= 3;
+  const N = 2; // ENSEMBLE_SAMPLES
+
   const briefCalls = 1; // strong, short
   const investCalls = breadth > 1 ? breadth : 0; // cheap, tool loop
   const suffCalls = breadth > 1 ? 1 : 0; // cheap, plain
-  const draftCalls = 1; // cheap, tool loop
   const judgeCalls = depth; // cheap, plain
   const refineCalls = depth; // cheap, tool loop (early-stop often fewer)
-  const finalCalls = 1; // strong, tool loop
+  const draftLoop = ensemble ? 0 : 1; // single draft is a tool loop
+  const draftPlain = ensemble ? N + 1 : 0; // proposers + merge (plain)
+  const finalLoop = ensemble ? 0 : 1; // single final is a strong tool loop
+  const finalPlain = ensemble ? N + 1 : 0; // candidates + select (strong, plain)
 
   const inTok = p.promptTokens + INSTR;
   const thinkPer = inTok * t.promptPrice + thinkOut * t.completionPrice;
   const synthPer = inTok * s.promptPrice + synthOut * s.completionPrice;
 
-  // Agent-loop phases (investigate/draft/refine/final) carry the tool multiplier;
-  // plain completions (brief/sufficiency/judge) do not.
-  const cheapLoop = investCalls + draftCalls + refineCalls;
-  const cheapPlain = suffCalls + judgeCalls;
+  // Agent-loop phases carry the tool multiplier; plain completions do not.
+  const cheapLoop = investCalls + refineCalls + draftLoop;
+  const cheapPlain = suffCalls + judgeCalls + draftPlain;
+  const strongLoop = finalLoop;
+  const strongPlain = briefCalls + finalPlain;
   const usd =
-    briefCalls * synthPer +
-    finalCalls * synthPer * mult +
+    strongPlain * synthPer +
+    strongLoop * synthPer * mult +
     cheapLoop * thinkPer * mult +
     cheapPlain * thinkPer;
 
   const baseCalls =
-    briefCalls + investCalls + suffCalls + draftCalls + judgeCalls + refineCalls + finalCalls;
+    briefCalls + investCalls + suffCalls + judgeCalls + refineCalls + draftLoop + draftPlain + finalLoop + finalPlain;
   const calls = p.useTools
-    ? Math.round((cheapLoop + finalCalls) * mult + cheapPlain + briefCalls)
+    ? Math.round((cheapLoop + strongLoop) * mult + cheapPlain + strongPlain)
     : baseCalls;
   return { usd, calls, ok: true, calibrated: calib.samples > 0 };
 }
