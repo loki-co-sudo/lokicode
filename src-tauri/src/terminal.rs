@@ -29,13 +29,28 @@ struct Chunk {
 fn shell() -> CommandBuilder {
     #[cfg(windows)]
     {
-        CommandBuilder::new("cmd.exe")
+        // PowerShell ships PSReadLine, giving modern line editing — command
+        // history (↑/↓), Ctrl+R reverse search, tab completion, syntax colors —
+        // which cmd.exe lacks. Prefer PowerShell 7 (pwsh) if installed.
+        let exe = if which("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
+        let mut c = CommandBuilder::new(exe);
+        c.arg("-NoLogo");
+        c
     }
     #[cfg(not(windows))]
     {
         let sh = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
         CommandBuilder::new(sh)
     }
+}
+
+#[cfg(windows)]
+fn which(exe: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file())
+        })
+        .unwrap_or(false)
 }
 
 /// Start (or restart) a PTY session under `id`.

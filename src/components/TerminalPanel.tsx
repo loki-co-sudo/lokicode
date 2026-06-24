@@ -36,6 +36,7 @@ function TerminalView({ id, cwd, active }: { id: string; cwd: string | null; act
       fontSize: 13,
       fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", monospace',
       cursorBlink: true,
+      scrollback: 10000, // keep plenty of history scrollable
       theme: { background: "#121214", foreground: "#e5e5e5" },
     });
     const fit = new FitAddon();
@@ -44,6 +45,55 @@ function TerminalView({ id, cwd, active }: { id: string; cwd: string | null; act
     fit.fit();
     termRef.current = term;
     fitRef.current = fit;
+
+    // Clipboard: Ctrl/Cmd+Shift+C/V always copy/paste; bare Ctrl+C copies only
+    // when there's a selection (otherwise it must pass through as SIGINT);
+    // Ctrl+V / Shift+Insert paste. Returning false stops xterm from forwarding.
+    const copySelection = () => {
+      const sel = term.getSelection();
+      if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+      return !!sel;
+    };
+    const paste = () =>
+      navigator.clipboard.readText().then((t) => t && term.paste(t)).catch(() => {});
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      const k = e.key.toLowerCase();
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.shiftKey && k === "c") {
+        copySelection();
+        return false;
+      }
+      if ((mod && e.shiftKey && k === "v") || (e.shiftKey && e.key === "Insert")) {
+        paste();
+        return false;
+      }
+      if (mod && !e.shiftKey && k === "c") {
+        if (copySelection()) {
+          term.clearSelection();
+          return false; // copied a selection — don't send SIGINT
+        }
+        return true; // no selection → let Ctrl+C interrupt
+      }
+      if (mod && !e.shiftKey && k === "v") {
+        paste();
+        return false;
+      }
+      return true;
+    });
+
+    // Right-click: copy the selection if any, else paste (Windows-Terminal style).
+    const onCtx = (e: MouseEvent) => {
+      e.preventDefault();
+      const sel = term.getSelection();
+      if (sel) {
+        navigator.clipboard.writeText(sel).catch(() => {});
+        term.clearSelection();
+      } else {
+        paste();
+      }
+    };
+    host.addEventListener("contextmenu", onCtx);
 
     let unOut: (() => void) | undefined;
     let unExit: (() => void) | undefined;
@@ -74,6 +124,7 @@ function TerminalView({ id, cwd, active }: { id: string; cwd: string | null; act
 
     return () => {
       disposed = true;
+      host.removeEventListener("contextmenu", onCtx);
       ro.disconnect();
       dataDisp.dispose();
       unOut?.();
