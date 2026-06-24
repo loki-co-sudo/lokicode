@@ -419,6 +419,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
   const threadMenuRef = useRef<HTMLDivElement>(null);
+  const editedRef = useRef(false); // set when the agent writes/changes files this turn
 
   useEffect(() => {
     if (!threadMenu) return;
@@ -606,6 +607,30 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     });
   }
 
+  // Shared tool callbacks: surface the tool card and, when a mutating tool
+  // finishes, refresh Git/Explorer in (near) real time so the diff appears as
+  // the agent works — not only at the end of the turn. Bursts are coalesced.
+  const lastToolRef = useRef("");
+  const refreshTimer = useRef<number | null>(null);
+  function scheduleFileRefresh() {
+    if (refreshTimer.current != null) return;
+    refreshTimer.current = window.setTimeout(() => {
+      refreshTimer.current = null;
+      onFilesChanged?.();
+    }, 300);
+  }
+  function handleToolStart(call: { name: string; args: Record<string, unknown> }) {
+    lastToolRef.current = call.name;
+    appendItem({ kind: "tool", name: call.name, args: call.args, status: "running" });
+  }
+  function handleToolEnd(status: ToolStatus, result: string) {
+    updateLastTool(status, result);
+    if (status === "done" && (lastToolRef.current === "write_file" || lastToolRef.current === "run_command")) {
+      editedRef.current = true;
+      scheduleFileRefresh();
+    }
+  }
+
   async function handleModelChange(id: string) {
     setModel(id);
     try {
@@ -631,7 +656,6 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   }
 
   // Record the pre-edit content the first time the agent touches a file.
-  const editedRef = useRef(false);
   function recordFileEdit(path: string, before: string | null) {
     editedRef.current = true;
     setEdits((m) => {
@@ -765,9 +789,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onThought: (label, m, content) =>
               appendItem({ kind: "thought", label, model: m, content }),
             onFinal: (text) => appendItem({ kind: "assistant", content: text }),
-            onToolStart: ({ name, args }) =>
-              appendItem({ kind: "tool", name, args, status: "running" }),
-            onToolEnd: (status, result) => updateLastTool(status, result),
+            onToolStart: handleToolStart,
+            onToolEnd: handleToolEnd,
             approve: (name, args) =>
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
             onUsage: addUsage,
@@ -782,9 +805,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onAssistantDelta: handleAssistantDelta,
             onAssistantDone: handleAssistantDone,
             onPlan: handlePlan,
-            onToolStart: ({ name, args }) =>
-              appendItem({ kind: "tool", name, args, status: "running" }),
-            onToolEnd: (status, result) => updateLastTool(status, result),
+            onToolStart: handleToolStart,
+            onToolEnd: handleToolEnd,
             approve: (name, args) =>
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
             askUser: (question) =>

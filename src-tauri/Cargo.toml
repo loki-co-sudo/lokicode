@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.25.0"
+version = "0.26.0"
 description = "lokicode - VS Code-style editor with OpenRouter AI chat"
 authors = ["herok"]
 edition = "2021"
@@ -32,4 +32,4 @@ base64 = "0.22"
 regex = "1"
 walkdir = "2"
 portable-pty = "0.8"
-
+sha2 = "0.10"
