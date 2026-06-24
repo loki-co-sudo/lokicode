@@ -1,27 +1,14 @@
-// Deep-reasoning core.
+// Deep-reasoning core: an orchestrator–worker pipeline.
 //
-// v2 (current default): an orchestrator–worker pipeline that beats naive
-// self-refinement on research/analysis tasks:
+//   Brief (intent + criteria + plan) → parallel grounded Investigation
+//        → Sufficiency gate → evidence-based Draft (Mixture-of-Agents)
+//        → verifier-guided Verify ×D (LLM-as-judge, escalation)
+//        → strong-model Final synthesis (best-of-N selection)
 //
-//   Plan/decompose → parallel grounded Investigation (read-only tools)
-//                  → evidence-based Draft
-//                  → adversarial, evidence-checking Verify ×D (CONVERGED early-stop)
-//                  → strong-model Final synthesis
-//
-// The cheap "thinking" model does the volume (investigations + verifications);
-// the strong "synthesis" model does the three high-leverage steps (plan, draft,
-// final). `samples` = breadth (how many independent angles), `depth` = number of
-// verify/refine rounds. Both work with or without tools.
-//
-// v1 (original) was a linear self-refine chain: draft → "improve this" ×D →
-// "summarize". It is preserved verbatim below as `runLinearRecurrentReasoning`.
-//
-// ── REVERT ────────────────────────────────────────────────────────────────
-// To go back to the original behaviour, flip USE_ORCHESTRATOR to false (one
-// line). The public entry point `runRecurrentReasoning` keeps the same
-// signature, so nothing else has to change. See /specs/deep-reasoning-v2.md for
-// the full rationale, the original algorithm, and the revert procedure.
-// ────────────────────────────────────────────────────────────────────────────
+// The cheap "thinking" model does the volume (investigation/verification/draft);
+// the strong "synthesis" model does the high-leverage steps (brief, final).
+// `samples` = breadth (independent angles), `depth` = verify/refine rounds.
+// See /specs/deep-reasoning-v2.md for the full design rationale.
 
 import { complete, type ApiMessage, type Usage } from "./openrouter";
 import { runAgent, type ToolStatus } from "./agent";
@@ -57,9 +44,6 @@ export interface ReasoningOptions {
 export const MAX_DEPTH = 16;
 export const MAX_SAMPLES = 5;
 
-/** Flip to false to revert to the original linear self-refine loop (v1). */
-const USE_ORCHESTRATOR = true;
-
 const MAX_EVIDENCE_CHARS = 9000;
 /** Verifier pass mark: stop refining once the judge scores at/above this. */
 const PASS_SCORE = 85;
@@ -77,16 +61,6 @@ function clampBreadth(b: number): number {
   return Math.max(1, Math.min(MAX_SAMPLES, Math.floor(b)));
 }
 
-/** Public entry point — dispatches to the active strategy. */
-export async function runRecurrentReasoning(
-  base: ApiMessage[],
-  opts: ReasoningOptions,
-  cb: ReasoningCallbacks,
-): Promise<void> {
-  return USE_ORCHESTRATOR
-    ? runOrchestratedReasoning(base, opts, cb)
-    : runLinearRecurrentReasoning(base, opts, cb);
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // v2 — Orchestrated reasoning
@@ -279,7 +253,7 @@ function clip(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + "\n…(以下省略)" : text;
 }
 
-async function runOrchestratedReasoning(
+export async function runRecurrentReasoning(
   base: ApiMessage[],
   opts: ReasoningOptions,
   cb: ReasoningCallbacks,
@@ -507,117 +481,4 @@ async function runOrchestratedReasoning(
     );
     cb.onFinal(final);
   }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// v1 — Original linear self-refine loop (PRESERVED for revert; see USE_ORCHESTRATOR)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const DRAFT_NUDGE: ApiMessage = {
-  role: "system",
-  content:
-    "Provide your best initial solution to the user's request, with brief reasoning. Be concrete.",
-};
-
-export async function runLinearRecurrentReasoning(
-  base: ApiMessage[],
-  opts: ReasoningOptions,
-  cb: ReasoningCallbacks,
-): Promise<void> {
-  const thinking = opts.thinkingModel;
-  const synthesis = opts.synthesisModel;
-  const depth = clampDepth(opts.depth);
-  const thinkingLabel = thinking || "(default)";
-
-  // A "think" step: a tool-using agent mini-loop when useTools, else a plain completion.
-  const think = async (messages: ApiMessage[], model?: string): Promise<string> => {
-    if (opts.useTools) {
-      return runAgent(
-        messages,
-        {
-          onAssistantText: () => {}, // intermediate text is folded into the phase result
-          onToolStart: cb.onToolStart,
-          onToolEnd: cb.onToolEnd,
-          approve: cb.approve,
-          onUsage: cb.onUsage,
-          onFileEdit: cb.onFileEdit,
-        },
-        { autoApprove: opts.autoApprove, model, signal: opts.signal },
-      );
-    }
-    const { content, usage } = await complete(messages, model);
-    cb.onUsage?.(usage);
-    return content;
-  };
-
-  // Phase 0 — draft (thinking model). With self-consistency (samples > 1) we
-  // generate several independent drafts in parallel and merge them by "voting".
-  // Parallel sampling is skipped when tools are on (would race on approvals).
-  const samples = opts.useTools ? 1 : Math.max(1, Math.min(MAX_SAMPLES, Math.floor(opts.samples ?? 1)));
-  let draft: string;
-  if (samples > 1) {
-    const drafts = await Promise.all(
-      Array.from({ length: samples }, () => think([...base, DRAFT_NUDGE], thinking)),
-    );
-    if (opts.signal?.aborted) return;
-    drafts.forEach((d, i) => cb.onThought(`ドラフト候補 ${i + 1}/${samples}`, thinkingLabel, d));
-    const voteMessages: ApiMessage[] = [
-      ...base,
-      {
-        role: "user",
-        content:
-          "以下は同じ課題に対する複数の独立した解です。各案の正しさ・完全性を比較し、" +
-          "最も妥当な内容を採用・統合して、単一の最良の解にまとめてください。\n\n" +
-          drafts.map((d, i) => `### 案 ${i + 1}\n${d}`).join("\n\n"),
-      },
-    ];
-    draft = await think(voteMessages, synthesis ?? thinking);
-    cb.onThought("候補の統合（self-consistency）", synthesis || thinkingLabel, draft);
-  } else {
-    draft = await think([...base, DRAFT_NUDGE], thinking);
-    cb.onThought("初期ドラフト", thinkingLabel, draft);
-  }
-
-  // Phase 1..D — reflect & refine (thinking model), with convergence early-stop.
-  for (let k = 1; k <= depth; k++) {
-    if (opts.signal?.aborted) return;
-    const reflectMessages: ApiMessage[] = [
-      ...base,
-      { role: "assistant", content: draft },
-      {
-        role: "user",
-        content:
-          "上記の解を批判的に検証し、誤り・不足・改善点を具体的に指摘した上で、改善した完全な解を提示してください。" +
-          (opts.useTools ? "必要ならツールでファイルを読んだりコマンドを実行して事実確認してください。" : "") +
-          "\nもし既に正しく完全で実質的な改善が不要なら、出力の先頭行に `CONVERGED` とだけ書いてください。",
-      },
-    ];
-    const reflected = await think(reflectMessages, thinking);
-
-    // Early stop: the model signalled convergence — avoid wasting further API calls.
-    if (/^\s*CONVERGED\b/i.test(reflected)) {
-      const stripped = reflected.replace(/^\s*CONVERGED\b[ \t]*\n?/i, "").trim();
-      if (stripped.length > 40) draft = stripped;
-      cb.onThought(`収束（早期終了 ${k}/${depth}）`, thinkingLabel, draft);
-      break;
-    }
-
-    draft = reflected;
-    cb.onThought(`内省 ${k}/${depth}`, thinkingLabel, draft);
-  }
-
-  if (opts.signal?.aborted) return;
-
-  // Phase final — synthesis (strong model).
-  const synthesisMessages: ApiMessage[] = [
-    ...base,
-    { role: "assistant", content: draft },
-    {
-      role: "user",
-      content:
-        "これまでの検討を踏まえ、ユーザー向けの最終回答を簡潔かつ正確にまとめてください。コードは適切なコードブロックで示してください。",
-    },
-  ];
-  const final = await think(synthesisMessages, synthesis);
-  cb.onFinal(final);
 }

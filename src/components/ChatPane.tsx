@@ -13,8 +13,8 @@ import {
   type ApiMessage,
   type ChatMessage,
   type Usage,
-  type ModelInfo,
 } from "../lib/openrouter";
+import { DEFAULT_THINKING_MODEL } from "../lib/agentSettings";
 import {
   runAgent,
   type AgentItem,
@@ -69,28 +69,6 @@ interface PendingApproval {
   name: string;
   args: Record<string, unknown>;
   resolve: (ok: boolean) => void;
-}
-
-/** Pick the strongest FREE, tool-capable model from the live list — used as the
- * default thinking model when the user hasn't chosen one. Prefers the highest
- * Artificial Analysis intelligence index when available, else a curated order of
- * known strong free reasoners. Tool support is required (investigation uses tools). */
-function pickFreeThinkingModel(models: ModelInfo[]): string {
-  const free = models.filter(
-    (m) => m.supportsTools && m.promptPrice === 0 && m.completionPrice === 0,
-  );
-  if (free.length === 0) return "";
-  const ranked = free.filter((m) => m.intelligenceIndex != null);
-  if (ranked.length > 0) {
-    ranked.sort((a, b) => (b.intelligenceIndex ?? 0) - (a.intelligenceIndex ?? 0));
-    return ranked[0].id;
-  }
-  const prefer = ["deepseek-r1", "deepseek-v3", "deepseek-chat", "qwen3", "qwq", "llama-3.3"];
-  for (const p of prefer) {
-    const hit = free.find((m) => m.id.toLowerCase().includes(p));
-    if (hit) return hit.id;
-  }
-  return free[0].id;
 }
 
 function buildSystemPrompt(
@@ -455,10 +433,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   }, [threadMenu]);
 
   const { models } = useModels();
-  // Default thinking model when the user hasn't picked one: strongest free,
-  // tool-capable model from the live list.
-  const autoFreeThinking = useMemo(() => pickFreeThinkingModel(models), [models]);
-  const effThinking = thinkingModel || autoFreeThinking;
+  // Default thinking model when the user hasn't picked one (cost-recommended free router).
+  const effThinking = thinkingModel || DEFAULT_THINKING_MODEL;
   // Calibration learned from real usage; refreshed after each run.
   const [calib, setCalib] = useState(() => loadCalib());
 
@@ -1067,10 +1043,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           <button onClick={onOpenSettings} className="ml-1 underline hover:text-amber-200">
             設定で選択
           </button>
-          してください。ディープ推論の思考モデルは未設定の間、無料モデル
-          {autoFreeThinking && (
-            <>（<span className="font-mono text-amber-200">{autoFreeThinking}</span>）</>
-          )}
+          してください。ディープ推論の思考モデルは未設定の間、無料の
+          <span className="font-mono text-amber-200"> {DEFAULT_THINKING_MODEL} </span>
           を自動使用します。
         </div>
       )}

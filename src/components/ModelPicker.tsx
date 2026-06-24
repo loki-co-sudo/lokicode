@@ -60,6 +60,7 @@ export default function ModelPicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [providers, setProviders] = useState<Set<string>>(new Set());
+  const [costs, setCosts] = useState<Set<string>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -139,15 +140,24 @@ export default function ModelPicker({
     const q = query.trim().toLowerCase();
     return models.filter((m) => {
       if (providers.size > 0 && !providers.has(providerOf(m.id))) return false;
+      if (costs.size > 0 && !costs.has(costTier(m.completionPrice, m.promptPrice).label)) return false;
       if (!q) return true;
       return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
     });
-  }, [models, query, providers]);
+  }, [models, query, providers, costs]);
 
   function toggleProvider(p: string) {
     setProviders((prev) => {
       const next = new Set(prev);
       next.has(p) ? next.delete(p) : next.add(p);
+      return next;
+    });
+  }
+
+  function toggleCost(c: string) {
+    setCosts((prev) => {
+      const next = new Set(prev);
+      next.has(c) ? next.delete(c) : next.add(c);
       return next;
     });
   }
@@ -201,6 +211,26 @@ export default function ModelPicker({
               spellCheck={false}
               className="w-full rounded border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-xs text-neutral-100 outline-none focus:border-blue-500"
             />
+            <div className="mt-2 flex flex-wrap gap-1">
+              {["無料", "低", "中", "高", "変動"].map((c) => {
+                const on = costs.has(c);
+                return (
+                  <button
+                    key={c}
+                    onClick={() => toggleCost(c)}
+                    title={`コスト: ${c}`}
+                    className={
+                      "rounded-full border px-2 py-0.5 text-[10px] " +
+                      (on
+                        ? "border-emerald-500 bg-emerald-600/30 text-emerald-200"
+                        : "border-neutral-700 text-neutral-400 hover:border-neutral-600")
+                    }
+                  >
+                    コスト {c}
+                  </button>
+                );
+              })}
+            </div>
             {providerList.length > 0 && (
               <div className="mt-2 flex max-h-[4.5rem] flex-wrap gap-1 overflow-y-auto pr-1">
                 {providerList.map(([p, n]) => {

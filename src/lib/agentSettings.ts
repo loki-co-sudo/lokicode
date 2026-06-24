@@ -6,6 +6,11 @@ const TIMEOUT_KEY = "lokicode.commandTimeout";
 export const DEFAULT_MAX_ITERATIONS = 50;
 export const DEFAULT_COMMAND_TIMEOUT = 60; // seconds
 
+/** Default thinking model when the user hasn't chosen one. OpenRouter's free
+ * router ("Free Models Router") — cost-recommended for the high-volume thinking
+ * phases (investigation/verification/draft). */
+export const DEFAULT_THINKING_MODEL = "openrouter/free";
+
 export const MAX_ITERATIONS_RANGE = [1, 500] as const;
 export const COMMAND_TIMEOUT_RANGE = [1, 600] as const; // backend clamps to this too
 
