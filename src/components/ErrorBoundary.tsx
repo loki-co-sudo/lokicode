@@ -2,6 +2,8 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 
 interface Props {
   children: ReactNode;
+  /** Render a pane-sized (h-full) fallback instead of full-screen. */
+  compact?: boolean;
 }
 
 interface State {
@@ -46,7 +48,12 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-[#1b1b1c] p-8 text-center text-neutral-300">
+      <div
+        className={
+          "flex flex-col items-center justify-center gap-4 bg-[#1b1b1c] p-8 text-center text-neutral-300 " +
+          (this.props.compact ? "h-full" : "h-screen")
+        }
+      >
         <div className="text-2xl">⚠️</div>
         <h1 className="text-lg font-semibold text-neutral-100">表示中に問題が発生しました</h1>
         <p className="max-w-md text-sm text-neutral-400">

@@ -5,6 +5,7 @@ import type { editor as MonacoEditor } from "monaco-editor";
 import { usePersistentBool, usePersistentString } from "./lib/usePersistentState";
 import EditorPane from "./components/EditorPane";
 import ChatPane, { type ChatPaneHandle } from "./components/ChatPane";
+import ErrorBoundary from "./components/ErrorBoundary";
 import SettingsPane from "./components/SettingsPane";
 import ExplorerPane from "./components/ExplorerPane";
 import SourceControlPane from "./components/SourceControlPane";
@@ -674,21 +675,25 @@ export default function App() {
             />
           )}
 
-          {/* Kept mounted (hidden when collapsed) so chat state and "選択をAIへ" survive toggling. */}
+          {/* Kept mounted (hidden when collapsed) so chat state and "選択をAIへ" survive toggling.
+              A floor width keeps it from collapsing to invisible, and its own ErrorBoundary
+              means a chat-only crash shows an in-pane reset instead of vanishing. */}
           <div
             style={chatOpen ? { width: `${100 - editorPct}%` } : undefined}
-            className={chatOpen ? "min-w-0" : "hidden"}
+            className={chatOpen ? "min-w-[320px]" : "hidden"}
           >
-            <ChatPane
-              ref={chatRef}
-              onOpenSettings={() => setSidebarView("settings")}
-              settingsVersion={settingsVersion}
-              currentCode={activeTab?.content ?? ""}
-              currentFileName={activeTab?.name ?? "untitled"}
-              currentFilePath={activeTab?.path ?? null}
-              workspaceRoot={workspaceRoot}
-              onFilesChanged={() => setFsNonce((n) => n + 1)}
-            />
+            <ErrorBoundary compact>
+              <ChatPane
+                ref={chatRef}
+                onOpenSettings={() => setSidebarView("settings")}
+                settingsVersion={settingsVersion}
+                currentCode={activeTab?.content ?? ""}
+                currentFileName={activeTab?.name ?? "untitled"}
+                currentFilePath={activeTab?.path ?? null}
+                workspaceRoot={workspaceRoot}
+                onFilesChanged={() => setFsNonce((n) => n + 1)}
+              />
+            </ErrorBoundary>
           </div>
         </div>
 

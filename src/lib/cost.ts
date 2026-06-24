@@ -61,7 +61,11 @@ export function loadCalib(): Calib {
 }
 
 function save(c: Calib) {
-  localStorage.setItem(CALIB_KEY, JSON.stringify(c));
+  try {
+    localStorage.setItem(CALIB_KEY, JSON.stringify(c));
+  } catch {
+    // storage full / unavailable — calibration is best-effort, never fatal
+  }
 }
 
 /** Fold an observed per-call completion-token count into the running average. */
