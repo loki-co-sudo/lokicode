@@ -5,11 +5,57 @@
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{ipc::Channel, AppHandle, Manager};
 
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.6";
+
+/// In-flight request cancellation registry. The frontend tags each pipeline run
+/// with a numeric id (passed as `cancel_id` to completions) and calls `cancel_run`
+/// when the user hits Stop; in-flight requests poll this set and bail promptly so
+/// the abort takes effect mid API call instead of only between steps.
+#[derive(Default)]
+pub struct Cancellations(pub Mutex<HashSet<u64>>);
+
+impl Cancellations {
+    fn contains(&self, id: u64) -> bool {
+        self.0.lock().map(|s| s.contains(&id)).unwrap_or(false)
+    }
+}
+
+/// Mark a run id as cancelled (called from the frontend Stop handler).
+#[tauri::command]
+pub fn cancel_run(state: tauri::State<'_, Cancellations>, id: u64) {
+    if let Ok(mut s) = state.0.lock() {
+        s.insert(id);
+    }
+}
+
+/// Drop a finished run id from the registry so the set doesn't grow unbounded.
+#[tauri::command]
+pub fn clear_run(state: tauri::State<'_, Cancellations>, id: u64) {
+    if let Ok(mut s) = state.0.lock() {
+        s.remove(&id);
+    }
+}
+
+/// Resolves once `id` is cancelled; never resolves when `id` is None. Used as the
+/// cancel arm of a `tokio::select!` against the network request future.
+async fn wait_cancelled(app: &AppHandle, id: Option<u64>) {
+    let Some(id) = id else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    loop {
+        if app.state::<Cancellations>().contains(id) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -272,6 +318,7 @@ pub async fn complete(
     app: AppHandle,
     messages: serde_json::Value,
     model: Option<String>,
+    cancel_id: Option<u64>,
 ) -> Result<CompleteResult, String> {
     let base = resolve_base(&app);
     let key = resolve_key(&app);
@@ -297,21 +344,31 @@ pub async fn complete(
     if let Some(k) = &key {
         req = req.bearer_auth(k);
     }
-    let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
-
-    let status = resp.status();
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
-        return Err(format!("API エラー (HTTP {status}): {detail}"));
+    let work = async move {
+        let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
+            return Err(format!("API エラー (HTTP {status}): {detail}"));
+        }
+        Ok(CompleteResult {
+            content: json["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            usage: extract_usage(&json),
+        })
+    };
+    // Bail with an empty result the moment the run is cancelled; the frontend's
+    // post-await abort check then stops the pipeline gracefully.
+    tokio::select! {
+        r = work => r,
+        _ = wait_cancelled(&app, cancel_id) => Ok(CompleteResult {
+            content: String::new(),
+            usage: Usage::default(),
+        }),
     }
-    Ok(CompleteResult {
-        content: json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        usage: extract_usage(&json),
-    })
 }
 
 #[derive(Serialize)]
@@ -329,6 +386,7 @@ pub async fn chat_once(
     messages: serde_json::Value,
     tools: serde_json::Value,
     model: Option<String>,
+    cancel_id: Option<u64>,
 ) -> Result<ChatOnceResult, String> {
     let base = resolve_base(&app);
     let key = resolve_key(&app);
@@ -358,18 +416,26 @@ pub async fn chat_once(
     if let Some(k) = &key {
         req = req.bearer_auth(k);
     }
-    let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
-
-    let status = resp.status();
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
-        return Err(format!("API エラー (HTTP {status}): {detail}"));
+    let work = async move {
+        let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
+            return Err(format!("API エラー (HTTP {status}): {detail}"));
+        }
+        Ok(ChatOnceResult {
+            message: json["choices"][0]["message"].clone(),
+            usage: extract_usage(&json),
+        })
+    };
+    tokio::select! {
+        r = work => r,
+        _ = wait_cancelled(&app, cancel_id) => Ok(ChatOnceResult {
+            message: serde_json::json!({ "role": "assistant", "content": "" }),
+            usage: Usage::default(),
+        }),
     }
-    Ok(ChatOnceResult {
-        message: json["choices"][0]["message"].clone(),
-        usage: extract_usage(&json),
-    })
 }
 
 #[derive(Serialize)]
@@ -396,6 +462,7 @@ pub async fn chat_once_stream(
     messages: serde_json::Value,
     tools: serde_json::Value,
     model: Option<String>,
+    cancel_id: Option<u64>,
     on_event: Channel<AgentStreamEvent>,
 ) -> Result<(), String> {
     let base = resolve_base(&app);
@@ -447,7 +514,18 @@ pub async fn chat_once_stream(
     let mut tool_calls: Vec<ToolCallAcc> = Vec::new();
     let mut usage = Usage::default();
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        // Race each chunk against cancellation so a stalled or long generation is
+        // interrupted promptly when the user hits Stop (returns what we have so far).
+        let chunk = tokio::select! {
+            c = stream.next() => c,
+            _ = wait_cancelled(&app, cancel_id) => {
+                let message = assemble_message(&content, &tool_calls);
+                let _ = on_event.send(AgentStreamEvent::Done { message, usage });
+                return Ok(());
+            }
+        };
+        let Some(chunk) = chunk else { break };
         let bytes = chunk.map_err(|e| e.to_string())?;
         buffer.push_str(&String::from_utf8_lossy(&bytes));
 

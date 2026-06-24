@@ -42,6 +42,8 @@ export interface ReasoningOptions {
    * turn off to trade a little quality for speed/cost. */
   ensemble?: boolean;
   signal?: { aborted: boolean };
+  /** Run id for backend cancellation; lets Stop abort in-flight API calls. */
+  runId?: number;
 }
 
 export const MAX_DEPTH = 16;
@@ -50,8 +52,10 @@ export const MAX_SAMPLES = 5;
 const MAX_EVIDENCE_CHARS = 9000;
 /** Verifier pass mark: stop refining once the judge scores at/above this. */
 const PASS_SCORE = 85;
-/** Below this (past the midpoint) the refine escalates to the strong model. */
+/** Below this the refine escalates to the strong model. */
 const ESCALATE_BELOW = 70;
+/** Max sufficiency→gap-fill rounds before drafting (recursive deepening cap). */
+const MAX_SUFFICIENCY_ROUNDS = 2;
 /** Ensemble width (Mixture-of-Agents): parallel proposer drafts / final
  * candidates. Kept small (2) so latency stays ~flat — the samples run in
  * parallel — while diversity cancels uncorrelated errors. */
@@ -103,17 +107,22 @@ const SUFFICIENCY = usr(
 );
 
 const INVESTIGATOR = sys(
-  "You are investigating ONE sub-question of a larger task. Answer it precisely and " +
-    "densely. Ground EVERY claim in concrete evidence — read the relevant files, list " +
-    "directories, and grep to find code rather than guessing; cite file:line where " +
-    "relevant. Explicitly separate VERIFIED facts from assumptions or open questions. " +
-    "No filler, no restating the question.",
+  "You are investigating ONE sub-question of a larger task. Read the relevant files, list " +
+    "directories, and grep to find code rather than guessing. Output in THIS exact structure " +
+    "so the evidence stays machine-usable downstream:\n" +
+    "VERIFIED: bullet facts each backed by a file:line citation (only things you actually confirmed).\n" +
+    "ASSUMPTIONS: bullets you inferred but did NOT confirm (or 'none').\n" +
+    "UNKNOWN: what you could not determine (or 'none').\n" +
+    "Be dense, no filler, no restating the question. Never put an unconfirmed claim under VERIFIED.",
 );
 
 const DRAFT_FROM_EVIDENCE = usr(
   "Using the gathered findings above as the primary source of truth, produce the best " +
-    "complete answer/solution to the user's task. Ground claims in the findings; do not " +
-    "invent facts they do not support. Be concrete, specific and decisive.",
+    "complete answer/solution to the user's task. The findings are tagged: treat VERIFIED " +
+    "bullets (with file:line citations) as established fact, state anything resting on " +
+    "ASSUMPTIONS as explicitly tentative, and do not assert anything left UNKNOWN — flag it " +
+    "as a gap instead. Do not invent facts the findings do not support. Be concrete, specific " +
+    "and decisive.",
 );
 
 const DRAFT_PLAIN = usr(
@@ -134,7 +143,9 @@ const JUDGE = usr(
     "counts/versions, citing function/file/library names that do not appear in the evidence " +
     "(treat any code identifier, function name, or library name not seen in the gathered evidence " +
     "as unverified and a defect), and describing a tool or feature as doing something its " +
-    "implementation does not), depth/insight appropriate to the audience 20, " +
+    "implementation does not; a claim asserted as fact that the evidence only lists under " +
+    "ASSUMPTIONS or UNKNOWN — rather than VERIFIED — is such a defect), " +
+    "depth/insight appropriate to the audience 20, " +
     "specificity & citations 10. " +
     'Output ONLY minified JSON: {"score": <int 0-100>, "defects": ["concrete issue, most ' +
     'important first", ...]} — use [] when there are no material defects.',
@@ -316,10 +327,16 @@ export async function runRecurrentReasoning(
           onUsage: cb.onUsage,
           onFileEdit: cb.onFileEdit,
         },
-        { autoApprove: opts.autoApprove, model, signal: opts.signal, readOnly: o.readOnly },
+        {
+          autoApprove: opts.autoApprove,
+          model,
+          signal: opts.signal,
+          readOnly: o.readOnly,
+          cancelId: opts.runId,
+        },
       );
     }
-    const { content, usage } = await complete(messages, model);
+    const { content, usage } = await complete(messages, model, opts.runId);
     cb.onUsage?.(usage);
     return content;
   };
@@ -368,26 +385,28 @@ export async function runRecurrentReasoning(
     );
     if (aborted()) return;
 
-    // ── Phase B2 — Sufficiency gate: fill evidence gaps once before concluding ──
-    const provisional = joinEvidence(findings);
-    const suffText = await think(
-      [...base, ...briefMsgs, sys(`収集された調査結果:\n\n${provisional}`), SUFFICIENCY],
-      thinking,
-      { tools: false },
-    );
-    if (aborted()) return;
-    const { sufficient, gaps } = parseSufficiency(suffText);
-    cb.onThought(
-      "十分性チェック",
-      thinkingLabel,
-      sufficient || gaps.length === 0
-        ? "証拠は十分と判断"
-        : "不足あり、追加調査します:\n" + gaps.map((g) => `- ${g}`).join("\n"),
-    );
-    if (!sufficient && gaps.length > 0) {
+    // ── Phase B2 — Sufficiency gate (recursive): re-check after filling gaps so
+    // newly-revealed gaps can also be covered, up to a bounded number of rounds. ─
+    for (let round = 1; round <= MAX_SUFFICIENCY_ROUNDS; round++) {
+      const suffText = await think(
+        [...base, ...briefMsgs, sys(`収集された調査結果:\n\n${joinEvidence(findings)}`), SUFFICIENCY],
+        thinking,
+        { tools: false },
+      );
+      if (aborted()) return;
+      const { sufficient, gaps } = parseSufficiency(suffText);
+      if (sufficient || gaps.length === 0) {
+        cb.onThought(`十分性チェック ${round}/${MAX_SUFFICIENCY_ROUNDS}`, thinkingLabel, "証拠は十分と判断");
+        break;
+      }
+      cb.onThought(
+        `十分性チェック ${round}/${MAX_SUFFICIENCY_ROUNDS}`,
+        thinkingLabel,
+        "不足あり、追加調査します:\n" + gaps.map((g) => `- ${g}`).join("\n"),
+      );
       for (let i = 0; i < gaps.length; i++) {
         if (aborted()) return;
-        findings.push(await investigate(gaps[i], `追加調査 ${i + 1}/${gaps.length}`));
+        findings.push(await investigate(gaps[i], `追加調査 ${round}-${i + 1}`));
       }
     }
     evidence = joinEvidence(findings);

@@ -10,6 +10,9 @@ import {
   streamChat,
   complete,
   getSettings,
+  nextRunId,
+  cancelRun,
+  clearRun,
   type ApiMessage,
   type ChatMessage,
   type Usage,
@@ -426,6 +429,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
+  const runIdRef = useRef<number>(0);
   const threadMenuRef = useRef<HTMLDivElement>(null);
   const editedRef = useRef(false); // set when the agent writes/changes files this turn
 
@@ -760,6 +764,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     editedRef.current = false;
     abortRef.current = { aborted: false };
     const signal = abortRef.current;
+    const runId = nextRunId();
+    runIdRef.current = runId;
 
     const base: ApiMessage[] = [
       buildSystemPrompt(currentFileName, currentFilePath, workspaceRoot, rulesText),
@@ -791,6 +797,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     // (trivial→chat / agent→tools / deep→deep pipeline), overriding the toggles.
     let useDeep = deepReasoning;
     let useAgent = agentMode;
+    // When the router itself judged the task "deep" we trust that signal and run
+    // the pipeline thoroughly (deeper verify, more samples, ensemble draft),
+    // rather than leaving the manual sliders to decide effort for a hard task.
+    let routedHard = false;
     if (autoRoute) {
       const route = await classifyTask(text, model || undefined);
       appendItem({
@@ -801,21 +811,26 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       });
       useDeep = route === "deep";
       useAgent = route !== "trivial";
+      routedHard = route === "deep";
     }
+    const effDepth = routedHard ? Math.max(depth, 4) : depth;
+    const effSamples = routedHard ? Math.max(samples, 3) : samples;
+    const effEnsemble = routedHard ? true : ensemble;
 
     try {
       if (useDeep) {
         await runRecurrentReasoning(
           base,
           {
-            depth,
-            samples,
+            depth: effDepth,
+            samples: effSamples,
             thinkingModel: effThinking || undefined,
             synthesisModel: synthesisModel || undefined,
             useTools: useAgent,
             autoApprove,
-            ensemble,
+            ensemble: effEnsemble,
             signal,
+            runId,
           },
           {
             onThought: (label, m, content) =>
@@ -849,6 +864,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           signal,
           workspaceRoot: workspaceRoot ?? undefined,
           allowAskUser: true,
+          cancelId: runId,
         };
         let finalAnswer = await runAgent(base, agentCb, agentOpts);
 
@@ -867,7 +883,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             },
           ];
           try {
-            const { content, usage } = await complete(reviewMsgs, model || undefined);
+            const { content, usage } = await complete(reviewMsgs, model || undefined, runId);
             addUsage(usage);
             const t = content.trim();
             if (t.length > 8 && !/^OK\b/i.test(t)) {
@@ -949,10 +965,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       // Structural agent-loop count of the pipeline: investigate(b) + draft +
       // verify(D) + final ≈ breadth + depth + 2 (plan is a plain completion).
       if (useDeep && useAgent) {
-        const breadth = Math.max(1, samples);
-        const structural = (breadth > 1 ? breadth : 0) + depth + 2;
+        const breadth = Math.max(1, effSamples);
+        const structural = (breadth > 1 ? breadth : 0) + effDepth + 2;
         recordToolRun(callCountRef.current, structural);
       }
+      clearRun(runId);
       setCalib(loadCalib());
       setBusy(false);
       setPending(null);
@@ -964,6 +981,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
 
   function handleStop() {
     abortRef.current.aborted = true;
+    // Abort any in-flight backend request for this run so Stop takes effect
+    // mid API call, not just between pipeline steps.
+    if (runIdRef.current) cancelRun(runIdRef.current);
     pending?.resolve(false);
     setPending(null);
     pendingQuestion?.resolve("（停止しました）");

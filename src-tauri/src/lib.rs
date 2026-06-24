@@ -149,6 +149,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(terminal::TerminalState::default())
+        .manage(openrouter::Cancellations::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -164,6 +165,8 @@ pub fn run() {
             openrouter::chat_once,
             openrouter::chat_once_stream,
             openrouter::complete,
+            openrouter::cancel_run,
+            openrouter::clear_run,
             search::grep_search,
             search::list_files,
             search::replace_in_files,

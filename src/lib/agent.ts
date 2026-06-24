@@ -289,6 +289,8 @@ export interface AgentOptions {
   readOnly?: boolean;
   /** Offer the ask_user tool (interactive top-level agent only). */
   allowAskUser?: boolean;
+  /** Run id for backend cancellation; lets Stop abort an in-flight API call. */
+  cancelId?: number;
 }
 
 /**
@@ -322,6 +324,7 @@ export async function runAgent(
         streamed += chunk;
         cb.onAssistantDelta?.(chunk);
       },
+      opts.cancelId,
     );
     cb.onUsage?.(usage);
     conv.push(assistant);

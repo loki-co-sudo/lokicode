@@ -41,13 +41,33 @@ export interface ChatOnceResult {
   usage: Usage;
 }
 
+let runCounter = 1;
+/** Allocate a cancellation id for one pipeline run; thread it into completions. */
+export function nextRunId(): number {
+  return runCounter++;
+}
+/** Tell the backend to abort any in-flight request tagged with this run id. */
+export function cancelRun(id: number): void {
+  void invoke("cancel_run", { id }).catch(() => {});
+}
+/** Drop a finished run id from the backend cancellation registry. */
+export function clearRun(id: number): void {
+  void invoke("clear_run", { id }).catch(() => {});
+}
+
 /** One non-streaming completion with tool-calling support (optional model override). */
 export function chatOnce(
   messages: ApiMessage[],
   tools: unknown[],
   model?: string,
+  cancelId?: number,
 ): Promise<ChatOnceResult> {
-  return invoke<ChatOnceResult>("chat_once", { messages, tools, model: model ?? null });
+  return invoke<ChatOnceResult>("chat_once", {
+    messages,
+    tools,
+    model: model ?? null,
+    cancelId: cancelId ?? null,
+  });
 }
 
 type AgentStreamEvent =
@@ -64,6 +84,7 @@ export function chatOnceStream(
   tools: unknown[],
   model: string | undefined,
   onDelta: (chunk: string) => void,
+  cancelId?: number,
 ): Promise<ChatOnceResult> {
   return new Promise<ChatOnceResult>((resolve, reject) => {
     const channel = new Channel<AgentStreamEvent>();
@@ -72,9 +93,13 @@ export function chatOnceStream(
       else if (event.type === "done") resolve({ message: event.message, usage: event.usage });
       else if (event.type === "error") reject(new Error(event.message));
     };
-    invoke("chat_once_stream", { messages, tools, model: model ?? null, onEvent: channel }).catch(
-      reject,
-    );
+    invoke("chat_once_stream", {
+      messages,
+      tools,
+      model: model ?? null,
+      cancelId: cancelId ?? null,
+      onEvent: channel,
+    }).catch(reject);
   });
 }
 
@@ -151,8 +176,16 @@ export interface CompleteResult {
 }
 
 /** Plain completion with an explicit model (used by the reasoning core). */
-export function complete(messages: ApiMessage[], model?: string): Promise<CompleteResult> {
-  return invoke<CompleteResult>("complete", { messages, model: model ?? null });
+export function complete(
+  messages: ApiMessage[],
+  model?: string,
+  cancelId?: number,
+): Promise<CompleteResult> {
+  return invoke<CompleteResult>("complete", {
+    messages,
+    model: model ?? null,
+    cancelId: cancelId ?? null,
+  });
 }
 
 /**
