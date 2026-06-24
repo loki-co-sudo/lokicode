@@ -8,6 +8,16 @@ import {
   DEFAULT_KEYS,
   type ActionId,
 } from "../lib/keybindings";
+import {
+  getMaxIterations,
+  getCommandTimeout,
+  setMaxIterations,
+  setCommandTimeout,
+  DEFAULT_MAX_ITERATIONS,
+  DEFAULT_COMMAND_TIMEOUT,
+  MAX_ITERATIONS_RANGE,
+  COMMAND_TIMEOUT_RANGE,
+} from "../lib/agentSettings";
 import ModelPicker from "./ModelPicker";
 import GithubAccount from "./GithubAccount";
 
@@ -21,10 +31,14 @@ export default function SettingsPane({ onSaved }: { onSaved: () => void }) {
   const [baseUrl, setBaseUrl] = useState("");
   const [keys, setKeys] = useState(() => loadKeybindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
+  const [maxIterations, setMaxIter] = useState(() => getMaxIterations());
+  const [commandTimeout, setCmdTimeout] = useState(() => getCommandTimeout());
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setKeys(loadKeybindings());
+    setMaxIter(getMaxIterations());
+    setCmdTimeout(getCommandTimeout());
     getSettings().then((s) => {
       setStatus(s);
       setModel(s.model);
@@ -59,6 +73,8 @@ export default function SettingsPane({ onSaved }: { onSaved: () => void }) {
       baseUrl: baseUrl.trim(),
     });
     saveKeybindings(keys);
+    setMaxIterations(maxIterations);
+    setCommandTimeout(commandTimeout);
     onSaved();
     setSaved(true);
     setApiKey("");
@@ -123,6 +139,58 @@ export default function SettingsPane({ onSaved }: { onSaved: () => void }) {
           <ModelPicker value={thinkingModel} onChange={setThinkingModel} listId="settings-thinking" className="mb-2" />
           <label className="mb-1 block text-[11px] text-neutral-400">合成モデル（高性能・空欄で既定）</label>
           <ModelPicker value={synthesisModel} onChange={setSynthesisModel} listId="settings-synthesis" />
+        </div>
+
+        <div className="rounded-md border border-neutral-700 bg-[#1e1e1e] p-2">
+          <p className="mb-2 font-medium text-neutral-300">エージェントの動作</p>
+
+          <label className="mb-1 block text-[11px] text-neutral-400">
+            ループ上限（ツール実行の最大回数）
+          </label>
+          <input
+            type="number"
+            min={MAX_ITERATIONS_RANGE[0]}
+            max={MAX_ITERATIONS_RANGE[1]}
+            value={maxIterations}
+            onChange={(e) =>
+              setMaxIter(
+                Math.max(
+                  MAX_ITERATIONS_RANGE[0],
+                  Math.min(MAX_ITERATIONS_RANGE[1], Math.floor(Number(e.target.value) || 0)),
+                ),
+              )
+            }
+            className="w-24 rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-neutral-100 outline-none focus:border-blue-500"
+          />
+          <p className="mb-3 mt-1 text-[11px] leading-relaxed text-neutral-500">
+            1 回の依頼でエージェントがツール（読み書き・コマンド・検索）を呼べる回数の上限です。
+            <b className="text-neutral-400">大きく</b>すると、多ファイルの大きな作業を途中で打ち切られにくくなります（その分コスト・時間は増えます）。
+            <b className="text-neutral-400">小さく</b>すると、暴走や使いすぎを早めに止められます。既定 {DEFAULT_MAX_ITERATIONS}（範囲 {MAX_ITERATIONS_RANGE[0]}–{MAX_ITERATIONS_RANGE[1]}）。
+          </p>
+
+          <label className="mb-1 block text-[11px] text-neutral-400">
+            コマンドのタイムアウト（秒）
+          </label>
+          <input
+            type="number"
+            min={COMMAND_TIMEOUT_RANGE[0]}
+            max={COMMAND_TIMEOUT_RANGE[1]}
+            value={commandTimeout}
+            onChange={(e) =>
+              setCmdTimeout(
+                Math.max(
+                  COMMAND_TIMEOUT_RANGE[0],
+                  Math.min(COMMAND_TIMEOUT_RANGE[1], Math.floor(Number(e.target.value) || 0)),
+                ),
+              )
+            }
+            className="w-24 rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-neutral-100 outline-none focus:border-blue-500"
+          />
+          <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
+            エージェントが <code className="rounded bg-neutral-700/60 px-1">run_command</code> で実行したコマンドを、この秒数で強制終了します（応答しないプロセスでの固まり防止）。
+            <b className="text-neutral-400">長く</b>すると、ビルドやテストなど時間のかかる処理を最後まで待てます。
+            <b className="text-neutral-400">短く</b>すると、ハングを早く打ち切れます。既定 {DEFAULT_COMMAND_TIMEOUT} 秒（範囲 {COMMAND_TIMEOUT_RANGE[0]}–{COMMAND_TIMEOUT_RANGE[1]}）。下部の統合ターミナルには影響しません。
+          </p>
         </div>
 
         <div className="rounded-md border border-neutral-700 bg-[#1e1e1e] p-2">

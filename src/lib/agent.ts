@@ -3,6 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { chatOnceStream, type ApiMessage, type Usage } from "./openrouter";
+import { getMaxIterations, getCommandTimeout } from "./agentSettings";
 
 export type ToolStatus = "running" | "done" | "error" | "denied";
 
@@ -28,7 +29,6 @@ export type AgentItem =
 
 export const RISKY_TOOLS = new Set(["write_file", "run_command"]);
 
-const MAX_ITERATIONS = 50;
 const MAX_RESULT_CHARS = 12000;
 
 interface CommandOutput {
@@ -216,6 +216,7 @@ async function execTool(
       const out = await invoke<CommandOutput>("run_command", {
         command: String(args.command),
         cwd: args.cwd ? String(args.cwd) : workspaceRoot ?? null,
+        timeoutSecs: getCommandTimeout(),
       });
       return truncate(
         `exit code: ${out.code}\n--- stdout ---\n${out.stdout}\n--- stderr ---\n${out.stderr}`,
@@ -306,8 +307,9 @@ export async function runAgent(
   const baseTools = opts.readOnly ? READ_ONLY_TOOLS : TOOLS;
   const advertised =
     opts.allowAskUser && cb.askUser ? [...baseTools, ASK_USER_TOOL] : baseTools;
+  const maxIterations = getMaxIterations();
 
-  for (let i = 0; i < MAX_ITERATIONS; i++) {
+  for (let i = 0; i < maxIterations; i++) {
     if (opts.signal?.aborted) return finalText;
 
     // Stream the assistant turn; falls back to onAssistantText if no delta hook.
@@ -415,7 +417,7 @@ export async function runAgent(
     }
   }
 
-  const limitMsg = `（ツール実行が上限の ${MAX_ITERATIONS} 回に達したため停止しました。続けるには指示を追加してください。）`;
+  const limitMsg = `（ツール実行が上限の ${maxIterations} 回に達したため停止しました。続けるには指示を追加するか、設定でループ上限を上げてください。）`;
   cb.onAssistantText(limitMsg);
   return finalText || limitMsg;
 }

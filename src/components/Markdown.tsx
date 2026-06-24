@@ -62,6 +62,19 @@ export default function Markdown({ content }: { content: string }) {
             </a>
           ),
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+          table: ({ children }) => (
+            <div className="my-2 overflow-x-auto rounded-md border border-neutral-700">
+              <table className="w-full border-collapse text-xs">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-neutral-700 bg-neutral-800/60 px-2 py-1 text-left align-top font-semibold text-neutral-200">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-neutral-700 px-2 py-1 align-top">{children}</td>
+          ),
           code: ({ className, children, ...props }) => {
             const isBlock = /language-/.test(className || "");
             if (isBlock) {
