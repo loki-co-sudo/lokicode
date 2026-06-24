@@ -242,12 +242,25 @@ export default function ModelPicker({
               >
                 <div className="truncate text-xs text-neutral-100">{m.name}</div>
                 <div className="truncate text-[10px] text-neutral-500">{m.id}</div>
-                <div className="flex gap-2 text-[10px] text-neutral-500">
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-neutral-500">
                   <span>
                     コスト <span className={costTier(m.completionPrice, m.promptPrice).cls}>{costTier(m.completionPrice, m.promptPrice).label}</span>
                   </span>
                   <span>出力 {fmtPerM(m.completionPrice)}/M</span>
                   {m.contextLength > 0 && <span>ctx {fmtCtx(m.contextLength)}</span>}
+                  <span className={m.supportsTools ? "text-emerald-400" : "text-neutral-600"}>
+                    {m.supportsTools ? "🛠 ツール" : "ツール非対応"}
+                  </span>
+                  {m.intelligenceIndex != null && (
+                    <span className="text-violet-300" title="Artificial Analysis 知能指数">
+                      知能 {Math.round(m.intelligenceIndex)}
+                    </span>
+                  )}
+                  {m.codingIndex != null && (
+                    <span className="text-sky-300" title="Artificial Analysis コーディング指数">
+                      コード {Math.round(m.codingIndex)}
+                    </span>
+                  )}
                 </div>
               </button>
             ))}

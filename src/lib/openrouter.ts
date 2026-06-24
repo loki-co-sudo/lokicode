@@ -96,6 +96,11 @@ export interface ModelInfo {
   completionPrice: number;
   /** Context window in tokens. 0 when unknown. */
   contextLength: number;
+  /** Whether the model advertises tool/function calling. */
+  supportsTools: boolean;
+  /** Artificial Analysis indices when OpenRouter exposes them (else null). */
+  intelligenceIndex: number | null;
+  codingIndex: number | null;
 }
 
 let modelsCache: ModelInfo[] | null = null;

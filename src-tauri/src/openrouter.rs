@@ -188,6 +188,11 @@ pub struct ModelInfo {
     pub completion_price: f64,
     /// Context window in tokens. 0 when unknown.
     pub context_length: u64,
+    /// Whether the model advertises function/tool calling support.
+    pub supports_tools: bool,
+    /// Artificial Analysis indices when OpenRouter exposes them (else null).
+    pub intelligence_index: Option<f64>,
+    pub coding_index: Option<f64>,
 }
 
 /// Fetch the list of models currently available on OpenRouter so the picker is
@@ -232,12 +237,21 @@ pub async fn list_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
                         Some(v) if v.is_finite() && v >= 0.0 => v,
                         _ => -1.0,
                     };
+                    let supports_tools = m["supported_parameters"]
+                        .as_array()
+                        .map(|a| a.iter().any(|v| v.as_str() == Some("tools")))
+                        .unwrap_or(false);
+                    // Defensive: only present if OpenRouter actually exposes it.
+                    let bench = &m["benchmarks"]["artificial_analysis"];
                     Some(ModelInfo {
                         id,
                         name,
                         prompt_price: price("prompt"),
                         completion_price: price("completion"),
                         context_length: m["context_length"].as_u64().unwrap_or(0),
+                        supports_tools,
+                        intelligence_index: bench["intelligence_index"].as_f64(),
+                        coding_index: bench["coding_index"].as_f64(),
                     })
                 })
                 .collect()
