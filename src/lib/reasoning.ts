@@ -200,14 +200,25 @@ function parseJudgment(text: string): { score: number; defects: string[] } {
   }
   const sm = text.match(/score[^0-9]*(\d{1,3})/i);
   const score = sm ? Math.max(0, Math.min(100, Number(sm[1]))) : 60;
-  return { score, defects: score >= 85 ? [] : ["（評価の解析に失敗。改善を継続）"] };
+  if (score >= PASS_SCORE) return { score, defects: [] };
+  // Parse failed but score is low: pass the raw verdict as the defect so REFINE
+  // has real guidance instead of a generic "couldn't parse" placeholder.
+  const raw = text.trim().slice(0, 1500);
+  return { score, defects: [raw || "（評価の解析に失敗。改善を継続）"] };
 }
 
 function parseBrief(
   text: string,
   maxQ: number,
 ): { goal: string; criteria: string[]; constraints: string[]; questions: string[] } {
-  const goalM = text.match(/GOAL[:：]\s*([\s\S]*?)(?:\n\s*(?:CRITERIA|CONSTRAINTS|QUESTIONS|評価基準)\b|$)/i);
+  // Tolerate header synonyms / language variants so a model that writes
+  // "OBJECTIVE" or "成功基準" instead of GOAL/CRITERIA doesn't yield an empty brief.
+  const G = "GOAL|OBJECTIVE|目標";
+  const CR = "CRITERIA|成功基準|評価基準";
+  const CO = "CONSTRAINTS|制約条件|制約";
+  const QU = "QUESTIONS|質問";
+  const NEXT = `${G}|${CR}|${CO}|${QU}`;
+  const goalM = text.match(new RegExp(`(?:${G})[:：]\\s*([\\s\\S]*?)(?:\\n\\s*(?:${NEXT})\\b|$)`, "i"));
   const goal = goalM ? goalM[1].trim().replace(/\s*\n+\s*/g, " ") : "";
   const bullets = (section: string): string[] =>
     section
@@ -215,9 +226,9 @@ function parseBrief(
       .map((l) => l.replace(/^\s*[-*•\d.)]+\s*/, "").trim())
       .filter((l) => l.length > 1)
       .slice(0, 8);
-  const critM = text.match(/CRITERIA[:：]?\s*([\s\S]*?)(?:\n\s*(?:CONSTRAINTS|QUESTIONS)\b|$)/i);
+  const critM = text.match(new RegExp(`(?:${CR})[:：]?\\s*([\\s\\S]*?)(?:\\n\\s*(?:${CO}|${QU})\\b|$)`, "i"));
   const criteria = critM ? bullets(critM[1]) : [];
-  const consM = text.match(/CONSTRAINTS[:：]?\s*([\s\S]*?)(?:\n\s*QUESTIONS\b|$)/i);
+  const consM = text.match(new RegExp(`(?:${CO})[:：]?\\s*([\\s\\S]*?)(?:\\n\\s*(?:${QU})\\b|$)`, "i"));
   const constraints = consM
     ? bullets(consM[1]).filter((c) => !/^none\b|^なし$/i.test(c))
     : [];
@@ -256,6 +267,18 @@ function parseQuestions(text: string, max: number): string[] {
 
 function clip(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + "\n…(以下省略)" : text;
+}
+
+/** Join findings within the evidence budget, but give each one a fair share so
+ * a blind tail-truncation can't drop whole later findings (esp. with breadth=5). */
+function joinEvidence(findings: string[]): string {
+  const joined = findings.join("\n\n");
+  if (joined.length <= MAX_EVIDENCE_CHARS || findings.length <= 1) {
+    return clip(joined, MAX_EVIDENCE_CHARS);
+  }
+  const sepCost = 2 * (findings.length - 1);
+  const budget = Math.max(400, Math.floor((MAX_EVIDENCE_CHARS - sepCost) / findings.length));
+  return findings.map((f) => clip(f, budget)).join("\n\n");
 }
 
 export async function runRecurrentReasoning(
@@ -346,7 +369,7 @@ export async function runRecurrentReasoning(
     if (aborted()) return;
 
     // ── Phase B2 — Sufficiency gate: fill evidence gaps once before concluding ──
-    const provisional = clip(findings.join("\n\n"), MAX_EVIDENCE_CHARS);
+    const provisional = joinEvidence(findings);
     const suffText = await think(
       [...base, ...briefMsgs, sys(`収集された調査結果:\n\n${provisional}`), SUFFICIENCY],
       thinking,
@@ -367,7 +390,7 @@ export async function runRecurrentReasoning(
         findings.push(await investigate(gaps[i], `追加調査 ${i + 1}/${gaps.length}`));
       }
     }
-    evidence = clip(findings.join("\n\n"), MAX_EVIDENCE_CHARS);
+    evidence = joinEvidence(findings);
   }
 
   // ── Phase C — Draft against the brief, grounded in the evidence ─────────────
@@ -432,7 +455,9 @@ export async function runRecurrentReasoning(
     if (score >= PASS_SCORE || defects.length === 0) break;
     if (aborted()) return;
 
-    const escalate = k >= Math.ceil(depth / 2) && score < ESCALATE_BELOW;
+    // Escalate the fix to the strong model whenever the score is low (any round),
+    // so even depth=1 / early low scores aren't left to the weak model.
+    const escalate = score < ESCALATE_BELOW;
     const refineModel = escalate ? synthesis : thinking;
     draft = await think(
       [...base, ...ctx, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
