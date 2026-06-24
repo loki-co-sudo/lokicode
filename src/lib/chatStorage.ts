@@ -26,24 +26,41 @@ export function safeSetItem(key: string, value: string): boolean {
 // Per-thread persistence is bounded so a long agent run (full file contents,
 // command output, grep results accumulate in tool results) can't fill the
 // ~5MB localStorage quota and wedge the whole app on the next launch.
-const MAX_FIELD = 16_000; // cap any single text field
+const MAX_FIELD = 16_000; // cap user/assistant messages (the real conversation)
+const MAX_THOUGHT = 2_000; // thoughts are verbose & ephemeral — cap hard
+const MAX_TOOL = 4_000; // tool results
 const MAX_ITEMS = 400; // cap items kept per thread
 
-function truncate(s: string): string {
-  return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\n…(省略)" : s;
+function cap(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n) + "\n…(省略)" : s;
 }
 
 /** A persistence-only clone with oversized text fields trimmed. The live,
- * in-memory items keep their full content; only what we store is shrunk. */
+ * in-memory items keep their full content; only what we store is shrunk.
+ * Deep-reasoning runs emit many large `thought`/`tool` items, so those are
+ * capped aggressively to keep the stored thread well under the quota. */
 function trimForStorage(items: AgentItem[]): AgentItem[] {
   const recent = items.length > MAX_ITEMS ? items.slice(-MAX_ITEMS) : items;
   return recent.map((it) => {
-    if (it.kind === "tool") return { ...it, result: truncate(it.result ?? "") };
+    if (it.kind === "tool") return { ...it, result: cap(it.result ?? "", MAX_TOOL) };
+    if (it.kind === "thought") return { ...it, content: cap(it.content, MAX_THOUGHT) };
     if (it.kind === "assistant" || it.kind === "user")
-      return { ...it, content: truncate(it.content) };
-    if (it.kind === "thought") return { ...it, content: truncate(it.content) };
+      return { ...it, content: cap(it.content, MAX_FIELD) };
     return it;
   });
+}
+
+/** Fallback: the actual conversation (user/assistant + plan), dropping the
+ * heavy thought/tool logs. Used when the full thread won't fit, so the
+ * conversation itself is never lost to quota pressure. */
+function conversationOnly(items: AgentItem[]): AgentItem[] {
+  return items
+    .filter((it) => it.kind === "user" || it.kind === "assistant" || it.kind === "plan")
+    .map((it) =>
+      it.kind === "assistant" || it.kind === "user"
+        ? { ...it, content: cap(it.content, MAX_FIELD) }
+        : it,
+    );
 }
 
 function readThreads(): Thread[] {
@@ -104,14 +121,19 @@ export function loadThread(id: string): AgentItem[] {
 }
 
 export function saveThread(id: string, items: AgentItem[]) {
-  const trimmed = trimForStorage(items);
-  // If even the trimmed thread won't fit, shed older items until it does so a
-  // single huge conversation can't permanently exhaust the quota.
-  let kept = trimmed;
-  while (kept.length > 0 && !safeSetItem(itemsKey(id), JSON.stringify(kept))) {
-    kept = kept.slice(Math.ceil(kept.length / 2)); // drop the oldest half, retry
+  // Try richest → leanest, so quota pressure costs the verbose logs first and
+  // the actual conversation (user/assistant) is preserved.
+  if (
+    !safeSetItem(itemsKey(id), JSON.stringify(trimForStorage(items))) &&
+    !safeSetItem(itemsKey(id), JSON.stringify(conversationOnly(items)))
+  ) {
+    // Still too big: keep the most recent conversation turns, dropping oldest.
+    let kept = conversationOnly(items);
+    while (kept.length > 0 && !safeSetItem(itemsKey(id), JSON.stringify(kept))) {
+      kept = kept.slice(Math.ceil(kept.length / 2));
+    }
+    if (kept.length === 0) safeSetItem(itemsKey(id), "[]");
   }
-  if (kept.length === 0) safeSetItem(itemsKey(id), "[]");
   const threads = readThreads();
   const t = threads.find((x) => x.id === id);
   if (t) {

@@ -136,9 +136,12 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const finalLoop = ensemble ? 0 : 1; // single final is a strong tool loop
   const finalPlain = ensemble ? N + 1 : 0; // candidates + select (strong, plain)
 
+  // Guard against negative / non-finite prices (e.g. a "-1" variable-price
+  // sentinel) so the estimate can never go absurdly negative.
+  const px = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0);
   const inTok = p.promptTokens + INSTR;
-  const thinkPer = inTok * t.promptPrice + thinkOut * t.completionPrice;
-  const synthPer = inTok * s.promptPrice + synthOut * s.completionPrice;
+  const thinkPer = inTok * px(t.promptPrice) + thinkOut * px(t.completionPrice);
+  const synthPer = inTok * px(s.promptPrice) + synthOut * px(s.completionPrice);
 
   // Agent-loop phases carry the tool multiplier; plain completions do not.
   const cheapLoop = investCalls + refineCalls + draftLoop;

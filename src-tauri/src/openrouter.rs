@@ -221,10 +221,14 @@ pub async fn list_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
                 .filter_map(|m| {
                     let id = m["id"].as_str()?.to_string();
                     let name = m["name"].as_str().unwrap_or(&id).to_string();
+                    // Some models (e.g. variable-price routers) report a "-1"
+                    // sentinel; treat negative/non-finite as unknown (0.0) so
+                    // cost estimates can't go absurdly negative.
                     let price = |k: &str| {
                         m["pricing"][k]
                             .as_str()
                             .and_then(|s| s.parse::<f64>().ok())
+                            .filter(|v| v.is_finite() && *v >= 0.0)
                             .unwrap_or(0.0)
                     };
                     Some(ModelInfo {
