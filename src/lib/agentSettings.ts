@@ -2,6 +2,10 @@
 
 const ITER_KEY = "lokicode.maxIterations";
 const TIMEOUT_KEY = "lokicode.commandTimeout";
+const VERIFY_KEY = "lokicode.verifyCommand";
+
+/** Max times the agent re-runs the verify command and fixes failures. */
+export const MAX_VERIFY_ATTEMPTS = 2;
 
 export const DEFAULT_MAX_ITERATIONS = 50;
 export const DEFAULT_COMMAND_TIMEOUT = 60; // seconds
@@ -40,6 +44,20 @@ export function setMaxIterations(n: number) {
 export function setCommandTimeout(n: number) {
   try {
     localStorage.setItem(TIMEOUT_KEY, String(n));
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/** Optional command run after the agent edits files; on failure the agent is
+ * asked to fix and it re-runs (execution-grounded self-correction). Empty = off. */
+export function getVerifyCommand(): string {
+  return (localStorage.getItem(VERIFY_KEY) ?? "").trim();
+}
+
+export function setVerifyCommand(s: string) {
+  try {
+    localStorage.setItem(VERIFY_KEY, s);
   } catch {
     /* non-fatal */
   }

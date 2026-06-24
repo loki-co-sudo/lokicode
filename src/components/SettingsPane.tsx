@@ -11,12 +11,15 @@ import {
 import {
   getMaxIterations,
   getCommandTimeout,
+  getVerifyCommand,
   setMaxIterations,
   setCommandTimeout,
+  setVerifyCommand,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_COMMAND_TIMEOUT,
   MAX_ITERATIONS_RANGE,
   COMMAND_TIMEOUT_RANGE,
+  MAX_VERIFY_ATTEMPTS,
 } from "../lib/agentSettings";
 import ModelPicker from "./ModelPicker";
 import GithubAccount from "./GithubAccount";
@@ -33,12 +36,14 @@ export default function SettingsPane({ onSaved }: { onSaved: () => void }) {
   const [capturing, setCapturing] = useState<ActionId | null>(null);
   const [maxIterations, setMaxIter] = useState(() => getMaxIterations());
   const [commandTimeout, setCmdTimeout] = useState(() => getCommandTimeout());
+  const [verifyCommand, setVerifyCmd] = useState(() => getVerifyCommand());
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setKeys(loadKeybindings());
     setMaxIter(getMaxIterations());
     setCmdTimeout(getCommandTimeout());
+    setVerifyCmd(getVerifyCommand());
     getSettings().then((s) => {
       setStatus(s);
       setModel(s.model);
@@ -75,6 +80,7 @@ export default function SettingsPane({ onSaved }: { onSaved: () => void }) {
     saveKeybindings(keys);
     setMaxIterations(maxIterations);
     setCommandTimeout(commandTimeout);
+    setVerifyCommand(verifyCommand.trim());
     onSaved();
     setSaved(true);
     setApiKey("");
@@ -190,6 +196,21 @@ export default function SettingsPane({ onSaved }: { onSaved: () => void }) {
             エージェントが <code className="rounded bg-neutral-700/60 px-1">run_command</code> で実行したコマンドを、この秒数で強制終了します（応答しないプロセスでの固まり防止）。
             <b className="text-neutral-400">長く</b>すると、ビルドやテストなど時間のかかる処理を最後まで待てます。
             <b className="text-neutral-400">短く</b>すると、ハングを早く打ち切れます。既定 {DEFAULT_COMMAND_TIMEOUT} 秒（範囲 {COMMAND_TIMEOUT_RANGE[0]}–{COMMAND_TIMEOUT_RANGE[1]}）。下部の統合ターミナルには影響しません。
+          </p>
+
+          <label className="mb-1 mt-3 block text-[11px] text-neutral-400">
+            検証コマンド（任意・自己修正）
+          </label>
+          <input
+            type="text"
+            spellCheck={false}
+            value={verifyCommand}
+            onChange={(e) => setVerifyCmd(e.target.value)}
+            placeholder="例: npm run build / npm test（空欄で無効）"
+            className="w-full rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-neutral-100 outline-none focus:border-blue-500"
+          />
+          <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
+            Agent モードで AI がファイルを変更した後、このコマンドを自動実行します。<b className="text-neutral-400">失敗（非0終了）なら、その出力を AI に渡して修正させ、成功するまで最大 {MAX_VERIFY_ATTEMPTS} 回やり直し</b>ます（実行接地の自己修正）。ビルド/テストが通る状態まで AI が直してくれます。空欄で無効。ワークスペース直下で実行されます。
           </p>
         </div>
 

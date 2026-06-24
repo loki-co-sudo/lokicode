@@ -14,7 +14,12 @@ import {
   type ChatMessage,
   type Usage,
 } from "../lib/openrouter";
-import { DEFAULT_THINKING_MODEL } from "../lib/agentSettings";
+import {
+  DEFAULT_THINKING_MODEL,
+  getVerifyCommand,
+  getCommandTimeout,
+  MAX_VERIFY_ATTEMPTS,
+} from "../lib/agentSettings";
 import { classifyTask } from "../lib/router";
 import {
   runAgent,
@@ -812,24 +817,27 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           },
         );
       } else if (useAgent) {
-        const finalAnswer = await runAgent(
-          base,
-          {
-            onAssistantText: (t) => appendItem({ kind: "assistant", content: t }),
-            onAssistantDelta: handleAssistantDelta,
-            onAssistantDone: handleAssistantDone,
-            onPlan: handlePlan,
-            onToolStart: handleToolStart,
-            onToolEnd: handleToolEnd,
-            approve: (name, args) =>
-              new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
-            askUser: (question) =>
-              new Promise<string>((resolve) => setPendingQuestion({ question, resolve })),
-            onUsage: addUsage,
-            onFileEdit: recordFileEdit,
-          },
-          { autoApprove, signal, workspaceRoot: workspaceRoot ?? undefined, allowAskUser: true },
-        );
+        const agentCb = {
+          onAssistantText: (t: string) => appendItem({ kind: "assistant", content: t }),
+          onAssistantDelta: handleAssistantDelta,
+          onAssistantDone: handleAssistantDone,
+          onPlan: handlePlan,
+          onToolStart: handleToolStart,
+          onToolEnd: handleToolEnd,
+          approve: (name: string, args: Record<string, unknown>) =>
+            new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
+          askUser: (question: string) =>
+            new Promise<string>((resolve) => setPendingQuestion({ question, resolve })),
+          onUsage: addUsage,
+          onFileEdit: recordFileEdit,
+        };
+        const agentOpts = {
+          autoApprove,
+          signal,
+          workspaceRoot: workspaceRoot ?? undefined,
+          allowAskUser: true,
+        };
+        let finalAnswer = await runAgent(base, agentCb, agentOpts);
 
         // Lightweight self-check (principle 4) for plain agent mode: one review
         // pass against the goal/constraints; only surfaced if it finds a fix.
@@ -854,6 +862,52 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             }
           } catch {
             /* self-check is best-effort */
+          }
+        }
+
+        // Execution-grounded self-correction (Reflexion): run the user's verify
+        // command; on failure, feed the output back and let the agent fix it,
+        // re-running until it passes or we hit the attempt cap.
+        const verifyCmd = getVerifyCommand();
+        if (verifyCmd && editedRef.current && !signal.aborted) {
+          for (let attempt = 1; attempt <= MAX_VERIFY_ATTEMPTS && !signal.aborted; attempt++) {
+            appendItem({ kind: "tool", name: "run_command", args: { command: verifyCmd }, status: "running" });
+            let result: { stdout: string; stderr: string; code: number };
+            try {
+              result = await invoke("run_command", {
+                command: verifyCmd,
+                cwd: workspaceRoot ?? null,
+                timeoutSecs: getCommandTimeout(),
+              });
+            } catch (e) {
+              updateLastTool("error", `検証コマンド実行エラー: ${e instanceof Error ? e.message : String(e)}`);
+              break;
+            }
+            const log = `exit code: ${result.code}\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`;
+            if (result.code === 0) {
+              updateLastTool("done", log);
+              appendItem({ kind: "assistant", content: `✅ 検証コマンド \`${verifyCmd}\` が成功しました。` });
+              break;
+            }
+            updateLastTool("error", log);
+            if (attempt >= MAX_VERIFY_ATTEMPTS) {
+              appendItem({
+                kind: "assistant",
+                content: `⚠️ 検証コマンドが ${MAX_VERIFY_ATTEMPTS} 回試しても失敗しました。手動で確認してください。`,
+              });
+              break;
+            }
+            const clipped =
+              log.length > 6000 ? log.slice(0, 3000) + "\n…(中略)…\n" + log.slice(-3000) : log;
+            const fixMsgs: ApiMessage[] = [
+              ...base,
+              { role: "assistant", content: finalAnswer },
+              {
+                role: "user",
+                content: `検証コマンド \`${verifyCmd}\` が失敗しました。出力:\n\n${clipped}\n\nこのエラーの原因を特定し、ファイルを修正して直してください。`,
+              },
+            ];
+            finalAnswer = await runAgent(fixMsgs, agentCb, agentOpts);
           }
         }
       } else {
