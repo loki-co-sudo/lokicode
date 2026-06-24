@@ -24,6 +24,13 @@ fn delete_file(path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())
 }
 
+/// Open the webview DevTools (requires the `devtools` Cargo feature). Bound to
+/// F12 in the frontend so logs are reachable even in release builds.
+#[tauri::command]
+fn open_devtools(window: tauri::WebviewWindow) {
+    window.open_devtools();
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DirEntry {
@@ -146,6 +153,7 @@ pub fn run() {
             read_text_file,
             write_text_file,
             delete_file,
+            open_devtools,
             list_dir,
             run_command,
             openrouter::send_chat,
