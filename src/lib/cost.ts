@@ -114,6 +114,10 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const s = p.synthesis;
   const calib = p.calib ?? loadCalib();
   if (!t || !s) return { usd: 0, calls: 0, ok: false, calibrated: calib.samples > 0 };
+  // Negative price = variable/router model (e.g. openrouter/fusion): cost is
+  // not knowable up front, so report "unknown" rather than a misleading figure.
+  if (t.promptPrice < 0 || t.completionPrice < 0 || s.promptPrice < 0 || s.completionPrice < 0)
+    return { usd: 0, calls: 0, ok: false, calibrated: calib.samples > 0 };
 
   const thinkOut = calib.outTokens;
   const synthOut = Math.round(calib.outTokens * SYNTH_PREMIUM);

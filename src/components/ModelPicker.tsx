@@ -19,9 +19,11 @@ function providerOf(id: string): string {
   return i === -1 ? id : id.slice(0, i);
 }
 
-/** Cost tier from the output price (per 1M tokens). */
+/** Cost tier from the output price (per 1M tokens). A negative price is a
+ * sentinel for variable/router models (e.g. openrouter/fusion) — not free. */
 function costTier(completionPrice: number, promptPrice: number): { label: string; cls: string } {
-  if (completionPrice <= 0 && promptPrice <= 0) return { label: "無料", cls: "text-sky-400" };
+  if (completionPrice < 0 || promptPrice < 0) return { label: "変動", cls: "text-fuchsia-400" };
+  if (completionPrice === 0 && promptPrice === 0) return { label: "無料", cls: "text-sky-400" };
   const perM = completionPrice * 1_000_000;
   if (perM < 1) return { label: "低", cls: "text-emerald-400" };
   if (perM < 10) return { label: "中", cls: "text-amber-400" };
@@ -29,6 +31,7 @@ function costTier(completionPrice: number, promptPrice: number): { label: string
 }
 
 function fmtPerM(price: number): string {
+  if (price < 0) return "変動"; // variable/router model
   const v = price * 1_000_000;
   if (v <= 0) return "—";
   return v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`;

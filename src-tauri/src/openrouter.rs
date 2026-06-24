@@ -221,15 +221,16 @@ pub async fn list_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
                 .filter_map(|m| {
                     let id = m["id"].as_str()?.to_string();
                     let name = m["name"].as_str().unwrap_or(&id).to_string();
-                    // Some models (e.g. variable-price routers) report a "-1"
-                    // sentinel; treat negative/non-finite as unknown (0.0) so
-                    // cost estimates can't go absurdly negative.
-                    let price = |k: &str| {
-                        m["pricing"][k]
-                            .as_str()
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .filter(|v| v.is_finite() && *v >= 0.0)
-                            .unwrap_or(0.0)
+                    // Pricing: a real value >= 0 is used as-is (0 = genuinely
+                    // free). Variable/router models (e.g. openrouter/fusion)
+                    // report "-1"; missing/unparseable is unknown. Both map to
+                    // -1.0, a sentinel the UI shows as "変動" (not "無料").
+                    let price = |k: &str| match m["pricing"][k]
+                        .as_str()
+                        .and_then(|s| s.parse::<f64>().ok())
+                    {
+                        Some(v) if v.is_finite() && v >= 0.0 => v,
+                        _ => -1.0,
                     };
                     Some(ModelInfo {
                         id,
