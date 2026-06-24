@@ -93,6 +93,8 @@ export default function App() {
   const [splitOn, setSplitOn] = useState(false);
   const [rightActiveId, setRightActiveId] = useState<string | null>(null);
   const [updateCheckNonce, setUpdateCheckNonce] = useState(0);
+  // Bumped when the agent writes files so Git/Explorer panes re-read from disk.
+  const [fsNonce, setFsNonce] = useState(0);
   // Whether the right-hand AI Agent pane is shown (collapsible like the sidebar).
   const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
   // Bottom integrated terminal panel.
@@ -515,6 +517,7 @@ export default function App() {
                 onAddFolder={handleAddFolder}
                 onRemoveRoot={removeRoot}
                 onClose={() => setSidebarView(null)}
+                reloadKey={fsNonce}
               />
             </div>
             <div className={sidebarView === "search" ? "h-full" : "hidden"}>
@@ -525,6 +528,7 @@ export default function App() {
                 root={workspaceRoot}
                 active={sidebarView === "git"}
                 onOpenDiff={setDiffTarget}
+                reloadKey={fsNonce}
               />
             </div>
           </aside>
@@ -683,6 +687,7 @@ export default function App() {
               currentFileName={activeTab?.name ?? "untitled"}
               currentFilePath={activeTab?.path ?? null}
               workspaceRoot={workspaceRoot}
+              onFilesChanged={() => setFsNonce((n) => n + 1)}
             />
           </div>
         </div>

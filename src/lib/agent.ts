@@ -28,7 +28,7 @@ export type AgentItem =
 
 export const RISKY_TOOLS = new Set(["write_file", "run_command"]);
 
-const MAX_ITERATIONS = 16;
+const MAX_ITERATIONS = 50;
 const MAX_RESULT_CHARS = 12000;
 
 interface CommandOutput {

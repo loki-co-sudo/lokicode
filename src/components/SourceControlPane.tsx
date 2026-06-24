@@ -33,6 +33,8 @@ interface SourceControlPaneProps {
   /** True when this pane is the visible sidebar view. */
   active: boolean;
   onOpenDiff: (target: DiffTarget) => void;
+  /** Bumped externally (e.g. after the agent edits files) to force a reload. */
+  reloadKey?: number;
 }
 
 function statusColor(letter: string): string {
@@ -53,7 +55,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export default function SourceControlPane({ root, active, onOpenDiff }: SourceControlPaneProps) {
+export default function SourceControlPane({ root, active, onOpenDiff, reloadKey }: SourceControlPaneProps) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -89,6 +91,11 @@ export default function SourceControlPane({ root, active, onOpenDiff }: SourceCo
   useEffect(() => {
     if (active) reload();
   }, [active, reload]);
+
+  // Reload when an external change (e.g. the agent wrote files) bumps reloadKey.
+  useEffect(() => {
+    if (reloadKey) reload();
+  }, [reloadKey, reload]);
 
   // Load history when the section is opened (and refresh on branch/commit changes).
   useEffect(() => {

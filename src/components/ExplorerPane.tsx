@@ -147,12 +147,14 @@ function RootSection({
   removable,
   onOpenFile,
   onRemove,
+  reloadKey,
 }: {
   root: string;
   activePath: string | null;
   removable: boolean;
   onOpenFile: (path: string) => void;
   onRemove: (root: string) => void;
+  reloadKey?: number;
 }) {
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
   const [gitMap, setGitMap] = useState<Map<string, string>>(new Map());
@@ -162,7 +164,7 @@ function RootSection({
     listDir(root)
       .then(setEntries)
       .catch(() => setEntries([]));
-  }, [root]);
+  }, [root, reloadKey]);
 
   const reloadGit = useCallback(() => {
     gitStatus(root)
@@ -178,7 +180,7 @@ function RootSection({
 
   useEffect(() => {
     reloadGit();
-  }, [reloadGit, activePath]);
+  }, [reloadGit, activePath, reloadKey]);
 
   return (
     <div className="mb-0.5">
@@ -232,6 +234,8 @@ interface ExplorerPaneProps {
   onAddFolder: () => void;
   onRemoveRoot: (root: string) => void;
   onClose: () => void;
+  /** Bumped externally (e.g. after the agent edits files) to refresh the tree. */
+  reloadKey?: number;
 }
 
 export default function ExplorerPane({
@@ -242,6 +246,7 @@ export default function ExplorerPane({
   onAddFolder,
   onRemoveRoot,
   onClose,
+  reloadKey,
 }: ExplorerPaneProps) {
   return (
     <div className="flex h-full flex-col bg-[#1b1b1c]">
@@ -276,6 +281,7 @@ export default function ExplorerPane({
             removable={roots.length > 1}
             onOpenFile={onOpenFile}
             onRemove={onRemoveRoot}
+            reloadKey={reloadKey}
           />
         ))}
       </div>

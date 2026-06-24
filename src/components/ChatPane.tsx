@@ -58,6 +58,8 @@ interface ChatPaneProps {
   currentFileName: string;
   currentFilePath: string | null;
   workspaceRoot: string | null;
+  /** Called after the agent has edited files so Git/Explorer can refresh. */
+  onFilesChanged?: () => void;
 }
 
 export interface ChatPaneHandle {
@@ -83,7 +85,7 @@ You can use the provided tools to read/list/write files and run shell commands t
 Operating principles:
 - Work from the GOAL and any CONSTRAINTS, not a fixed recipe: choose your own means, but never take irreversible actions beyond what was asked, and respect every stated constraint.
 - For non-trivial tasks, first state a brief plan with update_plan (current understanding, unknowns, steps) and keep exactly one step in_progress; update it as you go.
-- If the request is ambiguous or missing information in a way that materially changes the outcome, use ask_user to ask ONE concise question instead of guessing. Do not ask about trivia you can decide yourself.
+- When asked to BUILD or ADD a feature whose key design decisions are unspecified (e.g. "add a login feature" without the auth method, the target surface, or where data is stored), you MUST call ask_user to confirm those decisions BEFORE planning or writing any files. Do not silently assume them. Ask one concise question (you may offer 2-3 options). Only skip this for choices trivial enough that any reasonable default is fine.
 - On errors or missing info, do not freeze or invent facts: gather evidence with tools, and if the same approach fails twice, switch strategy or ask_user rather than repeating it.
 - Before giving your final answer, self-check it against the goal and constraints; if it is incomplete, wrong, or violates a constraint, fix it. Report honestly what you could not verify.
 Guidelines:
@@ -363,7 +365,7 @@ function AskUserCard({
 }
 
 const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
-  { onOpenSettings, settingsVersion, currentCode, currentFileName, currentFilePath, workspaceRoot },
+  { onOpenSettings, settingsVersion, currentCode, currentFileName, currentFilePath, workspaceRoot, onFilesChanged },
   ref,
 ) {
   const [threadId, setThreadId] = useState(() => ensureActiveThread());
@@ -629,7 +631,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   }
 
   // Record the pre-edit content the first time the agent touches a file.
+  const editedRef = useRef(false);
   function recordFileEdit(path: string, before: string | null) {
+    editedRef.current = true;
     setEdits((m) => {
       if (m.has(path)) return m;
       const n = new Map(m);
@@ -714,6 +718,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setMentionQuery(null);
     streamingRef.current = false;
     callCountRef.current = 0;
+    editedRef.current = false;
     abortRef.current = { aborted: false };
     const signal = abortRef.current;
 
@@ -849,6 +854,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       setBusy(false);
       setPending(null);
       setPendingQuestion(null);
+      // Let the Git panel / Explorer pick up files the agent created or edited.
+      if (editedRef.current) onFilesChanged?.();
     }
   }
 
