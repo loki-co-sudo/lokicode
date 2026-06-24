@@ -137,7 +137,7 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const briefCalls = 1; // strong, short
   const investCalls = breadth > 1 ? breadth : 0; // cheap, tool loop
   const suffCalls = breadth > 1 ? 1 : 0; // cheap, plain
-  const judgeCalls = depth; // cheap, plain
+  const judgeCalls = depth; // STRONG, plain (strong verifier)
   const refineCalls = depth; // cheap, tool loop (early-stop often fewer)
   const draftLoop = ensemble ? 0 : 1; // single draft is a tool loop
   const draftPlain = ensemble ? N + 1 : 0; // proposers + merge (plain)
@@ -153,9 +153,9 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
 
   // Agent-loop phases carry the tool multiplier; plain completions do not.
   const cheapLoop = investCalls + refineCalls + draftLoop;
-  const cheapPlain = suffCalls + judgeCalls + draftPlain;
+  const cheapPlain = suffCalls + draftPlain;
   const strongLoop = finalLoop;
-  const strongPlain = briefCalls + finalPlain;
+  const strongPlain = briefCalls + finalPlain + judgeCalls; // judge runs on the strong model
   const usd =
     strongPlain * synthPer +
     strongLoop * synthPer * mult +

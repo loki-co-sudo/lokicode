@@ -15,6 +15,7 @@ import {
   type Usage,
 } from "../lib/openrouter";
 import { DEFAULT_THINKING_MODEL } from "../lib/agentSettings";
+import { classifyTask } from "../lib/router";
 import {
   runAgent,
   type AgentItem,
@@ -393,6 +394,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [selfCheck, setSelfCheck] = usePersistentBool("lokicode.selfCheck", true);
   const [deepReasoning, setDeepReasoning] = usePersistentBool("lokicode.deepReasoning", false);
   const [ensemble, setEnsemble] = usePersistentBool("lokicode.ensemble", true);
+  const [autoRoute, setAutoRoute] = usePersistentBool("lokicode.autoRoute", false);
   const [depth, setDepth] = useState<number>(() => {
     const v = Number(localStorage.getItem("lokicode.depth"));
     return v >= 1 && v <= MAX_DEPTH ? v : 4;
@@ -767,8 +769,24 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     }
     base.push(...history, { role: "user", content: text });
 
+    // Difficulty router: when "オート" is on, one cheap call picks the path
+    // (trivial→chat / agent→tools / deep→deep pipeline), overriding the toggles.
+    let useDeep = deepReasoning;
+    let useAgent = agentMode;
+    if (autoRoute) {
+      const route = await classifyTask(text, model || undefined);
+      appendItem({
+        kind: "thought",
+        label: "自動振り分け",
+        model: "router",
+        content: `判定: ${route}（${route === "deep" ? "ディープ推論" : route === "agent" ? "Agent" : "チャット"}）`,
+      });
+      useDeep = route === "deep";
+      useAgent = route !== "trivial";
+    }
+
     try {
-      if (deepReasoning) {
+      if (useDeep) {
         await runRecurrentReasoning(
           base,
           {
@@ -776,7 +794,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             samples,
             thinkingModel: effThinking || undefined,
             synthesisModel: synthesisModel || undefined,
-            useTools: agentMode,
+            useTools: useAgent,
             autoApprove,
             ensemble,
             signal,
@@ -793,7 +811,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onFileEdit: recordFileEdit,
           },
         );
-      } else if (agentMode) {
+      } else if (useAgent) {
         const finalAnswer = await runAgent(
           base,
           {
@@ -863,7 +881,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       // Calibrate the tool multiplier from this run, then refresh the estimate.
       // Structural agent-loop count of the pipeline: investigate(b) + draft +
       // verify(D) + final ≈ breadth + depth + 2 (plan is a plain completion).
-      if (deepReasoning && agentMode) {
+      if (useDeep && useAgent) {
         const breadth = Math.max(1, samples);
         const structural = (breadth > 1 ? breadth : 0) + depth + 2;
         recordToolRun(callCountRef.current, structural);
@@ -1160,6 +1178,14 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             accent="bg-indigo-500"
             label="ディープ推論"
             title="ドラフト→内省→合成を反復して回答の質を上げます（API 呼び出しが増え高コスト）。"
+            disabled={autoRoute}
+          />
+          <Toggle
+            checked={autoRoute}
+            onChange={setAutoRoute}
+            accent="bg-teal-500"
+            label="オート"
+            title="ON: 依頼の難易度を自動判定し、チャット/Agent/ディープ推論を自動で振り分けます（易しい依頼を高速・低コストに）。Agent・ディープ推論トグルより優先。"
           />
           {agentMode && (
             <Toggle

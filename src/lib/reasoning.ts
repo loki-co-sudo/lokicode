@@ -415,15 +415,18 @@ export async function runRecurrentReasoning(
   // refinement to the strong model when the cheap model is stuck on a low score.
   for (let k = 1; k <= depth; k++) {
     if (aborted()) return;
+    // Strong verifier: the critic runs on the synthesis (strong) model so the
+    // "smart-enough floor" is met even when the thinking model is a weak/free
+    // router — otherwise a weak judge misses errors (e.g. wrong file paths).
     const verdict = await think(
       [...base, ...ctx, { role: "assistant", content: draft }, JUDGE],
-      thinking,
+      synthesis,
       { tools: false },
     );
     const { score, defects } = parseJudgment(verdict);
     cb.onThought(
       `検証 ${k}/${depth}（スコア ${score}）`,
-      thinkingLabel,
+      synthLabel,
       defects.length ? defects.map((d) => `- ${d}`).join("\n") : "重大な指摘なし",
     );
     if (score >= PASS_SCORE || defects.length === 0) break;
