@@ -496,46 +496,54 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <ActivityBar view={sidebarView} onSelect={handleActivitySelect} />
 
-        {sidebarView === "settings" ? (
-          <aside className="w-72 shrink-0 border-r border-neutral-800">
+        {/* One persistent sidebar: every pane stays mounted and is toggled by
+            visibility, so switching views never remounts/refetches (fast). */}
+        <aside
+          className={
+            "shrink-0 border-r border-neutral-800 " +
+            (sidebarView === "settings"
+              ? "w-72"
+              : sidebarView
+                ? "w-60"
+                : "w-0 overflow-hidden border-r-0")
+          }
+        >
+          <div className={sidebarView === "settings" ? "h-full" : "hidden"}>
             <SettingsPane onSaved={() => setSettingsVersion((v) => v + 1)} />
-          </aside>
-        ) : workspaceRoot ? (
-          // Keep both panes mounted so their data survives view switches
-          // (no reload flicker); collapse to width 0 when the sidebar is hidden.
-          <aside
-            className={
-              "shrink-0 border-r border-neutral-800 " +
-              (sidebarView ? "w-60" : "w-0 overflow-hidden border-r-0")
-            }
-          >
-            <div className={sidebarView === "explorer" ? "h-full" : "hidden"}>
-              <ExplorerPane
-                roots={workspaceRoots}
-                activePath={activeTab?.path ?? null}
-                onOpenFile={openPath}
-                onOpenFolder={handleOpenFolder}
-                onAddFolder={handleAddFolder}
-                onRemoveRoot={removeRoot}
-                onClose={() => setSidebarView(null)}
-                reloadKey={fsNonce}
-              />
-            </div>
-            <div className={sidebarView === "search" ? "h-full" : "hidden"}>
-              <SearchPane root={workspaceRoot} onOpenFile={openPath} />
-            </div>
-            <div className={sidebarView === "git" ? "h-full" : "hidden"}>
-              <SourceControlPane
-                root={workspaceRoot}
-                active={sidebarView === "git"}
-                onOpenDiff={setDiffTarget}
-                reloadKey={fsNonce}
-              />
-            </div>
-          </aside>
-        ) : (
-          sidebarView && (
-            <aside className="w-60 shrink-0 border-r border-neutral-800">
+          </div>
+
+          {workspaceRoot ? (
+            <>
+              <div className={sidebarView === "explorer" ? "h-full" : "hidden"}>
+                <ExplorerPane
+                  roots={workspaceRoots}
+                  activePath={activeTab?.path ?? null}
+                  onOpenFile={openPath}
+                  onOpenFolder={handleOpenFolder}
+                  onAddFolder={handleAddFolder}
+                  onRemoveRoot={removeRoot}
+                  onClose={() => setSidebarView(null)}
+                  reloadKey={fsNonce}
+                />
+              </div>
+              <div className={sidebarView === "search" ? "h-full" : "hidden"}>
+                <SearchPane root={workspaceRoot} onOpenFile={openPath} />
+              </div>
+              <div className={sidebarView === "git" ? "h-full" : "hidden"}>
+                <SourceControlPane
+                  root={workspaceRoot}
+                  active={sidebarView === "git"}
+                  onOpenDiff={setDiffTarget}
+                  reloadKey={fsNonce}
+                />
+              </div>
+            </>
+          ) : (
+            <div
+              className={
+                sidebarView && sidebarView !== "settings" ? "h-full" : "hidden"
+              }
+            >
               <div className="flex h-full flex-col items-stretch gap-3 bg-[#1b1b1c] p-3 text-xs text-neutral-400">
                 <p>フォルダを開くと、ここにファイルや Git の状態が表示されます。</p>
                 <button
@@ -563,9 +571,9 @@ export default function App() {
                   </div>
                 )}
               </div>
-            </aside>
-          )
-        )}
+            </div>
+          )}
+        </aside>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div

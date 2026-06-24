@@ -38,6 +38,9 @@ export interface ReasoningOptions {
   /** Let phases use tools (read/write/list/run/grep). */
   useTools: boolean;
   autoApprove: boolean;
+  /** Mixture-of-Agents (parallel proposer drafts + best-of-N final). Default on;
+   * turn off to trade a little quality for speed/cost. */
+  ensemble?: boolean;
   signal?: { aborted: boolean };
 }
 
@@ -128,8 +131,10 @@ const JUDGE = usr(
     "factual grounding & correctness 35 (every concrete claim must be supported by the evidence; " +
     "any unsupported, evidence-contradicting, or internally inconsistent claim is a CRITICAL " +
     "defect that caps the score at 50 — this explicitly includes invented specific numbers/" +
-    "counts/versions, and describing a tool or feature as doing something its implementation does " +
-    "not), depth/insight appropriate to the audience 20, " +
+    "counts/versions, citing function/file/library names that do not appear in the evidence " +
+    "(treat any code identifier, function name, or library name not seen in the gathered evidence " +
+    "as unverified and a defect), and describing a tool or feature as doing something its " +
+    "implementation does not), depth/insight appropriate to the audience 20, " +
     "specificity & citations 10. " +
     'Output ONLY minified JSON: {"score": <int 0-100>, "defects": ["concrete issue, most ' +
     'important first", ...]} — use [] when there are no material defects.',
@@ -267,7 +272,7 @@ export async function runRecurrentReasoning(
   const aborted = () => opts.signal?.aborted === true;
   // Spend the extra ensemble passes only when the task is non-trivial (the user
   // asked for breadth or depth); simple runs stay single-pass and fast.
-  const ensemble = breadth > 1 || depth >= 3;
+  const ensemble = (opts.ensemble ?? true) && (breadth > 1 || depth >= 3);
 
   // A reasoning step: a tool-using agent mini-loop when useTools, else a plain
   // completion. `tools:false` forces a plain completion even in tool mode (for
@@ -332,18 +337,12 @@ export async function runRecurrentReasoning(
   let evidence = "";
   if (breadth > 1 && brief.questions.length >= 2) {
     const qs = brief.questions;
-    let findings: string[];
-    if (opts.useTools) {
-      // Serial when tools are on: keeps tool cards correctly ordered.
-      findings = [];
-      for (let i = 0; i < qs.length; i++) {
-        if (aborted()) return;
-        findings.push(await investigate(qs[i], `調査 ${i + 1}/${qs.length}`));
-      }
-    } else {
-      // Pure completions: safe and fast to run in parallel.
-      findings = await Promise.all(qs.map((q, i) => investigate(q, `調査 ${i + 1}/${qs.length}`)));
-    }
+    // Always parallel — investigations are read-only and independent, so this
+    // cuts latency from sum-of-questions to the slowest one. (Tool cards from
+    // concurrent agents may interleave; that's cosmetic.)
+    const findings = await Promise.all(
+      qs.map((q, i) => investigate(q, `調査 ${i + 1}/${qs.length}`)),
+    );
     if (aborted()) return;
 
     // ── Phase B2 — Sufficiency gate: fill evidence gaps once before concluding ──

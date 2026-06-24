@@ -392,6 +392,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [autoApprove, setAutoApprove] = usePersistentBool("lokicode.autoApprove", false);
   const [selfCheck, setSelfCheck] = usePersistentBool("lokicode.selfCheck", true);
   const [deepReasoning, setDeepReasoning] = usePersistentBool("lokicode.deepReasoning", false);
+  const [ensemble, setEnsemble] = usePersistentBool("lokicode.ensemble", true);
   const [depth, setDepth] = useState<number>(() => {
     const v = Number(localStorage.getItem("lokicode.depth"));
     return v >= 1 && v <= MAX_DEPTH ? v : 4;
@@ -777,6 +778,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             synthesisModel: synthesisModel || undefined,
             useTools: agentMode,
             autoApprove,
+            ensemble,
             signal,
           },
           {
@@ -1185,7 +1187,14 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
 
           {deepReasoning && (
             <>
-              <label className="flex items-center gap-1.5" title="検証フェーズ（敵対的レビュー→改善）の反復回数。多いほど高品質・高コスト">
+              <Toggle
+                checked={ensemble}
+                onChange={setEnsemble}
+                accent="bg-indigo-500"
+                label="アンサンブル"
+                title="ON: 下書き・最終を複数生成して統合/選抜し精度を上げます（やや遅い・高コスト）。OFF: 単発で生成して高速・低コスト。速度優先なら OFF。"
+              />
+              <label className="flex items-center gap-1.5" title="検証フェーズ（敵対的レビュー→改善）の反復回数。多いほど高品質・高コスト。速度優先なら小さく">
                 検証の深さ
                 <input
                   type="range"
