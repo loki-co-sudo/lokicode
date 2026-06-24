@@ -567,10 +567,10 @@ export default function App() {
           )
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           ref={containerRef}
-          className="flex min-h-0 flex-1"
+          className="flex min-h-0 min-w-0 flex-1"
           onMouseMove={onMouseMove}
           onMouseUp={stopDrag}
           onMouseLeave={stopDrag}
