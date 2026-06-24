@@ -807,7 +807,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         kind: "thought",
         label: "自動振り分け",
         model: "router",
-        content: `判定: ${route}（${route === "deep" ? "ディープ推論" : route === "agent" ? "Agent" : "チャット"}）`,
+        content: `判定: ${route}（${route === "deep" ? "ディープシンク" : route === "agent" ? "Agent" : "チャット"}）`,
       });
       useDeep = route === "deep";
       useAgent = route !== "trivial";
@@ -1150,7 +1150,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           <button onClick={onOpenSettings} className="ml-1 underline hover:text-amber-200">
             設定で選択
           </button>
-          してください。ディープ推論の思考モデルは未設定の間、無料の
+          してください。ディープシンクの思考モデルは未設定の間、無料の
           <span className="font-mono text-amber-200"> {DEFAULT_THINKING_MODEL} </span>
           を自動使用します。
         </div>
@@ -1158,7 +1158,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
 
       {hasKey && deepReasoning && synthWeakReason && (
         <div className="m-3 rounded-md border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
-          ⚠️ ディープ推論の検証器（安全網）は<b>合成モデル</b>で動きます。現在の合成モデル
+          ⚠️ ディープシンクの検証器（安全網）は<b>合成モデル</b>で動きます。現在の合成モデル
           <span className="font-mono text-amber-200"> {synthesisModel || model} </span>
           は<b>{synthWeakReason}</b>のため、誤りの見逃しや品質低下の恐れがあります。
           <button onClick={onOpenSettings} className="ml-1 underline hover:text-amber-200">
@@ -1275,7 +1275,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             checked={deepReasoning}
             onChange={setDeepReasoning}
             accent="bg-indigo-500"
-            label="ディープ推論"
+            label="ディープシンク"
             title="ドラフト→内省→合成を反復して回答の質を上げます（API 呼び出しが増え高コスト）。"
             disabled={autoRoute}
           />
@@ -1284,7 +1284,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onChange={setAutoRoute}
             accent="bg-teal-500"
             label="オート"
-            title="ON: 依頼の難易度を自動判定し、チャット/Agent/ディープ推論を自動で振り分けます（易しい依頼を高速・低コストに）。Agent・ディープ推論トグルより優先。"
+            title="ON: 依頼の難易度を自動判定し、チャット/Agent/ディープシンクを自動で振り分けます（易しい依頼を高速・低コストに）。Agent・ディープシンクトグルより優先。"
           />
           {agentMode && (
             <Toggle

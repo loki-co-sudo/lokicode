@@ -140,7 +140,7 @@ export default function SettingsPane({ onSaved }: { onSaved: () => void }) {
         </div>
 
         <div className="rounded-md border border-indigo-800/40 bg-indigo-950/20 p-2">
-          <p className="mb-2 font-medium text-indigo-300">🧠 ディープ推論のモデル</p>
+          <p className="mb-2 font-medium text-indigo-300">🧠 ディープシンクのモデル</p>
           <label className="mb-1 block text-[11px] text-neutral-400">思考モデル（軽量・空欄で既定）</label>
           <ModelPicker value={thinkingModel} onChange={setThinkingModel} listId="settings-thinking" className="mb-2" />
           <label className="mb-1 block text-[11px] text-neutral-400">合成モデル（高性能・空欄で既定）</label>
