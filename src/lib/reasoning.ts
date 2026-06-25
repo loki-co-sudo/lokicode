@@ -11,7 +11,7 @@
 // See /specs/deep-reasoning-v2.md for the full design rationale.
 
 import { complete, type ApiMessage, type Usage } from "./openrouter";
-import { runAgent, type ToolStatus } from "./agent";
+import { runAgent, type ToolStatus, type Todo } from "./agent";
 
 export interface ReasoningCallbacks {
   /** Emitted for the draft and each reflection (thinking phases). */
@@ -24,6 +24,12 @@ export interface ReasoningCallbacks {
   approve: (name: string, args: Record<string, unknown>) => Promise<boolean>;
   onUsage?: (usage: Usage) => void;
   onFileEdit?: (path: string, prev: string | null) => void;
+  // Optional agent-execution hooks (Phase F): when wired, the execution phase
+  // shows like a normal agent run — TODO plan checklist (progress) + streaming
+  // narration (what it's doing now) — instead of a silent stream of tool cards.
+  onPlan?: (todos: Todo[]) => void;
+  onAssistantDelta?: (chunk: string) => void;
+  onAssistantDone?: () => void;
 }
 
 export interface ReasoningOptions {
@@ -172,12 +178,18 @@ const NEEDS_EXEC = usr(
 
 // Execution phase instruction: hand the finished plan to a real tool-using agent.
 const EXECUTE = usr(
-  "上の分析・計画は完成しています。ここからは説明ではなく『実行』です。計画に沿って、ツール" +
-    "（read_file / write_file / run_command / grep_search 等）を使って実際にファイルを変更し、" +
-    "必要なコマンドを実行してタスクを完了させてください。まだ実行していない作業だけを行い、勝手に" +
-    "スコープを広げないこと。git の commit / push などが計画に含まれるなら、それも実際に実行する" +
-    "こと。完了したら、実際に行った操作（変更したファイル名、実行したコマンドとその結果）だけを" +
-    "簡潔に報告してください。できなかったこと・失敗したことは正直に書くこと。",
+  "上の分析・計画は完成しています。ここからは説明ではなく『実行』です。\n" +
+    "最初に update_plan で具体的な手順（3〜7個程度）のチェックリストを作り、進めながら逐次" +
+    "更新してください（ユーザーは進捗をこのチェックリストで見ています）。\n" +
+    "そのうえで、計画に沿ってツール（read_file / write_file / run_command / grep_search 等）で" +
+    "実際にファイルを変更し、必要なコマンドを実行してタスクを完了させてください。\n" +
+    "効率重視で、最小手数で終わらせること: ねらいが明確なら独立した操作は1ターンで複数まとめて" +
+    "呼び、すでに読んだ/分かっている内容を読み直さない、探索のための調査は最小限にとどめる。" +
+    "計画にない作業へスコープを広げない。\n" +
+    "git の commit / push などが計画に含まれるなら、それも実際に実行すること。\n" +
+    "目的を達成したら、それ以上ツールを呼ばずに完了とし、実際に行った操作（変更したファイル名、" +
+    "実行したコマンドとその結果）だけを簡潔に報告してください。できなかったこと・失敗したことは" +
+    "正直に書くこと。",
 );
 
 // Appended to the analysis FINAL/SELECT so the synthesizer never claims it has
@@ -453,12 +465,21 @@ export async function runRecurrentReasoning(
   // doing the work with approval. This is the big speed win for action tasks. ──
   if (opts.useTools && needsExec) {
     phaseTag = "execute";
-    cb.onThought("実行フェーズ", synthLabel, "計画に沿って実際の操作（編集・コマンド・git 等）を実行します…");
+    cb.onThought("実行フェーズ", thinkingLabel, "計画に沿って実際の操作（編集・コマンド・git 等）を実行します。進捗は下のチェックリストとカードで確認できます。");
     const exStart = performance.now();
+    // The executor runs on the cheap/fast thinking model (the strong model already
+    // produced the plan): execution is mostly mechanical tool-driving, so this cuts
+    // per-step latency a lot. Wire the full agent UI hooks (plan checklist +
+    // streaming narration + tool cards) so the user can see what it's doing and how
+    // far along it is — the streamed turns are the answer, so we don't re-emit it.
+    const exModel = thinking ?? synthesis;
     const report = await runAgent(
       [...base, ...briefMsgs, { role: "assistant", content: briefText }, EXECUTE],
       {
-        onAssistantText: () => {},
+        onAssistantText: (t) => cb.onFinal(t),
+        onAssistantDelta: cb.onAssistantDelta,
+        onAssistantDone: cb.onAssistantDone,
+        onPlan: cb.onPlan,
         onToolStart: cb.onToolStart,
         onToolEnd: cb.onToolEnd,
         approve: cb.approve,
@@ -467,7 +488,7 @@ export async function runRecurrentReasoning(
       },
       {
         autoApprove: opts.autoApprove,
-        model: synthesis,
+        model: exModel,
         signal: opts.signal,
         readOnly: false,
         cancelId: opts.runId,
@@ -475,10 +496,12 @@ export async function runRecurrentReasoning(
       },
     );
     const exMs = performance.now() - exStart;
-    timings.push({ phase: "execute", ms: exMs, model: synthesis || "(default)", tools: true });
-    console.log(`[deepthink] execute · ${(exMs / 1000).toFixed(1)}s · ${synthesis || "(default)"} · tools`);
-    if (aborted()) return;
-    cb.onFinal(report);
+    timings.push({ phase: "execute", ms: exMs, model: exModel || "(default)", tools: true });
+    console.log(`[deepthink] execute · ${(exMs / 1000).toFixed(1)}s · ${exModel || "(default)"} · tools`);
+    // The executor's turns are shown live (streamed bubbles / onAssistantText →
+    // onFinal), so we don't re-emit `report` here — that would duplicate the
+    // final answer. `void report` keeps it explicit that the value is intentional.
+    void report;
     return;
   }
 

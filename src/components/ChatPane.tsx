@@ -857,6 +857,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               new Promise<boolean>((resolve) => setPending({ name, args, resolve })),
             onUsage: addUsage,
             onFileEdit: recordFileEdit,
+            // Execution phase (Phase F) shows like a normal agent run: live plan
+            // checklist + streaming narration so progress is visible.
+            onPlan: handlePlan,
+            onAssistantDelta: handleAssistantDelta,
+            onAssistantDone: handleAssistantDone,
           },
         );
       } else if (useAgent) {
