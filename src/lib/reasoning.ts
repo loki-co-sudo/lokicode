@@ -162,6 +162,31 @@ const REFINE = (defects: string[], useTools: boolean) =>
       defects.map((d) => `- ${d}`).join("\n"),
   );
 
+// Gate for the plan→execute handoff: does finishing the task need side effects?
+const NEEDS_EXEC = usr(
+  "Does fully completing the user's request require making real changes to the system — " +
+    "creating/editing/deleting files, running commands, or git add/commit/push (i.e. side " +
+    "effects beyond producing an answer)? Consider what 'done' means for THIS request. " +
+    "Reply with exactly YES or NO.",
+);
+
+// Execution phase instruction: hand the finished plan to a real tool-using agent.
+const EXECUTE = usr(
+  "上の分析・計画は完成しています。ここからは説明ではなく『実行』です。計画に沿って、ツール" +
+    "（read_file / write_file / run_command / grep_search 等）を使って実際にファイルを変更し、" +
+    "必要なコマンドを実行してタスクを完了させてください。まだ実行していない作業だけを行い、勝手に" +
+    "スコープを広げないこと。git の commit / push などが計画に含まれるなら、それも実際に実行する" +
+    "こと。完了したら、実際に行った操作（変更したファイル名、実行したコマンドとその結果）だけを" +
+    "簡潔に報告してください。できなかったこと・失敗したことは正直に書くこと。",
+);
+
+// Appended to the analysis FINAL/SELECT so the synthesizer never claims it has
+// already performed actions it cannot perform (deep-think analysis is read-only).
+const NO_FALSE_ACTIONS =
+  " 重要: あなたはここまで読み取り専用の調査しかしていません。ファイルの作成・編集・削除、" +
+  "コマンド実行、git の commit/push などの副作用は一切行っていません。それらを『実施した』" +
+  "『反映済み』のように完了形で書いてはいけません。実行が必要な作業は『次に行う手順』として記述してください。";
+
 const FINAL = (useTools: boolean) =>
   usr(
     "You are the senior expert delivering the FINAL answer to the user. Before finalizing, " +
@@ -176,7 +201,8 @@ const FINAL = (useTools: boolean) =>
       "Describe each tool/feature EXACTLY as the evidence shows and do not invent specific " +
       "numbers, counts, versions or capabilities (e.g. an exact count of supported models, or a " +
       "tool that reads files when its implementation does not). Use " +
-      "Markdown, code in fenced blocks. Reply in the user's language.",
+      "Markdown, code in fenced blocks. Reply in the user's language." +
+      NO_FALSE_ACTIONS,
   );
 
 // Mixture-of-Agents: merge several independent proposer drafts into one.
@@ -193,7 +219,8 @@ const SELECT = usr(
     "superior, well-grounded points from the others and removing anything unsupported, off-brief, " +
     "or that violates a CONSTRAINT. The result MUST satisfy the GOAL/CRITERIA. Describe tools/" +
     "features exactly as the evidence shows; invent no specific numbers or capabilities. Output " +
-    "ONLY the final answer (Markdown, in the user's language).",
+    "ONLY the final answer (Markdown, in the user's language)." +
+    NO_FALSE_ACTIONS,
 );
 
 /** Parse the judge's JSON verdict; tolerant of stray prose around the JSON. */
@@ -299,14 +326,14 @@ export async function runRecurrentReasoning(
 ): Promise<void> {
   const thinking = opts.thinkingModel; // cheap; undefined → default model
   const synthesis = opts.synthesisModel; // strong; undefined → default model
-  const depth = clampDepth(opts.depth);
-  const breadth = clampBreadth(opts.samples ?? 1);
+  let depth = clampDepth(opts.depth);
+  let breadth = clampBreadth(opts.samples ?? 1);
   const thinkingLabel = thinking || "(default)";
   const synthLabel = synthesis || thinkingLabel;
   const aborted = () => opts.signal?.aborted === true;
   // Spend the extra ensemble passes only when the task is non-trivial (the user
   // asked for breadth or depth); simple runs stay single-pass and fast.
-  const ensemble = (opts.ensemble ?? true) && (breadth > 1 || depth >= 3);
+  let ensemble = (opts.ensemble ?? true) && (breadth > 1 || depth >= 3);
 
   // A reasoning step: a tool-using agent mini-loop when useTools, else a plain
   // completion. `tools:false` forces a plain completion even in tool mode (for
@@ -340,6 +367,28 @@ export async function runRecurrentReasoning(
     cb.onUsage?.(usage);
     return content;
   };
+
+  // ── Phase 0 — Does this task require real execution (side effects)? ──────────
+  // Deep-think is otherwise read-only and only produces text. When tools are on
+  // and the task needs writes/commands/git, we (a) lighten the heavy analysis so
+  // we don't burn 10+ slow strong-model calls before doing the actual work, and
+  // (b) run a real execution pass at the end (Phase F) that actually performs it.
+  let needsExec = false;
+  if (opts.useTools) {
+    const verdict = await think([...base, NEEDS_EXEC], thinking, { tools: false });
+    if (aborted()) return;
+    needsExec = /\b(yes|true)\b|はい/i.test(verdict.trim());
+    if (needsExec) {
+      ensemble = false;
+      depth = Math.min(depth, 2);
+      breadth = Math.min(breadth, 2);
+      cb.onThought(
+        "タスク種別",
+        thinkingLabel,
+        "実行を伴うタスクと判断。分析を軽量化し、最後に実際の操作（ファイル変更・コマンド実行）を行います。",
+      );
+    }
+  }
 
   // ── Phase A — Solution brief (strong model designs intent + criteria + plan) ─
   const briefText = await think([...base, BRIEF(breadth)], synthesis, { tools: false });
@@ -493,6 +542,7 @@ export async function runRecurrentReasoning(
 
   // ── Phase E — Final (strong model). On non-trivial tasks: best-of-N with the
   // strong model selecting/merging the best candidate (verifier selection). ────
+  let final: string;
   if (ensemble) {
     const candidates = await Promise.all(
       Array.from({ length: ENSEMBLE_SAMPLES }, () =>
@@ -505,7 +555,7 @@ export async function runRecurrentReasoning(
     candidates.forEach((c, i) =>
       cb.onThought(`最終候補 ${i + 1}/${ENSEMBLE_SAMPLES}`, synthLabel, c),
     );
-    const final = await think(
+    final = await think(
       [
         ...base,
         ...ctx,
@@ -518,13 +568,41 @@ export async function runRecurrentReasoning(
       synthesis,
       { tools: false },
     );
-    cb.onFinal(final);
   } else {
-    const final = await think(
+    final = await think(
       [...base, ...ctx, { role: "assistant", content: draft }, FINAL(opts.useTools)],
       synthesis,
       { readOnly: true },
     );
-    cb.onFinal(final);
+  }
+  cb.onFinal(final);
+  if (aborted()) return;
+
+  // ── Phase F — Execution (plan→execute handoff). Deep-think only analyzes; when
+  // the task needs real changes and tools are enabled, hand the finished plan to
+  // a real agent loop that actually performs the writes/commands (with approval),
+  // then report what it really did — so it never just *claims* to have acted. ──
+  if (opts.useTools && needsExec) {
+    cb.onThought("実行フェーズ", synthLabel, "計画を実際の操作に移します（ファイル変更・コマンド実行・git 等）…");
+    const report = await runAgent(
+      [...base, ...briefMsgs, { role: "assistant", content: final }, EXECUTE],
+      {
+        onAssistantText: () => {},
+        onToolStart: cb.onToolStart,
+        onToolEnd: cb.onToolEnd,
+        approve: cb.approve,
+        onUsage: cb.onUsage,
+        onFileEdit: cb.onFileEdit,
+      },
+      {
+        autoApprove: opts.autoApprove,
+        model: synthesis,
+        signal: opts.signal,
+        readOnly: false,
+        cancelId: opts.runId,
+      },
+    );
+    if (aborted()) return;
+    cb.onFinal(report);
   }
 }
