@@ -291,6 +291,8 @@ export interface AgentOptions {
   allowAskUser?: boolean;
   /** Run id for backend cancellation; lets Stop abort an in-flight API call. */
   cancelId?: number;
+  /** Label for the `[tag]` console timing logs (e.g. "execute" for deep-think). */
+  traceTag?: string;
 }
 
 /**
@@ -310,12 +312,17 @@ export async function runAgent(
   const advertised =
     opts.allowAskUser && cb.askUser ? [...baseTools, ASK_USER_TOOL] : baseTools;
   const maxIterations = getMaxIterations();
+  // Live timing to the F12 console so a long agent loop isn't a black box: each
+  // iteration logs its LLM round-trip time, tool calls, and per-tool durations.
+  const trace = opts.traceTag ?? "agent";
+  const runStart = performance.now();
 
   for (let i = 0; i < maxIterations; i++) {
     if (opts.signal?.aborted) return finalText;
 
     // Stream the assistant turn; falls back to onAssistantText if no delta hook.
     let streamed = "";
+    const llmStart = performance.now();
     const { message: assistant, usage } = await chatOnceStream(
       conv,
       advertised,
@@ -329,6 +336,13 @@ export async function runAgent(
     cb.onUsage?.(usage);
     conv.push(assistant);
 
+    const nCalls = (assistant.tool_calls ?? []).length;
+    console.log(
+      `[${trace}] iter ${i + 1}/${maxIterations} · LLM ${((performance.now() - llmStart) / 1000).toFixed(1)}s · ` +
+        `${opts.model || "(default)"} · ${nCalls} tool-call(s)` +
+        (assistant.content ? ` · text ${assistant.content.length}c` : ""),
+    );
+
     if (assistant.content) {
       finalText = assistant.content;
       if (!cb.onAssistantDelta) cb.onAssistantText(assistant.content);
@@ -336,7 +350,12 @@ export async function runAgent(
     if (streamed || assistant.content) cb.onAssistantDone?.();
 
     const calls = assistant.tool_calls ?? [];
-    if (calls.length === 0) return finalText; // final answer reached
+    if (calls.length === 0) {
+      console.log(
+        `[${trace}] done · ${((performance.now() - runStart) / 1000).toFixed(1)}s · ${i + 1} iteration(s)`,
+      );
+      return finalText; // final answer reached
+    }
 
     for (const call of calls) {
       if (opts.signal?.aborted) return finalText;
@@ -387,6 +406,7 @@ export async function runAgent(
       let result = "";
 
       if (RISKY_TOOLS.has(name) && !opts.autoApprove) {
+        console.log(`[${trace}]   tool ${name} · 承認待ち（ユーザーの操作待ち）…`);
         const ok = await cb.approve(name, args);
         if (!ok) {
           status = "denied";
@@ -407,12 +427,16 @@ export async function runAgent(
       }
 
       if (status !== "denied") {
+        const toolStart = performance.now();
         try {
           result = await execTool(name, args, opts.workspaceRoot);
         } catch (err) {
           status = "error";
           result = "エラー: " + (err instanceof Error ? err.message : String(err));
         }
+        console.log(
+          `[${trace}]   tool ${name} · ${((performance.now() - toolStart) / 1000).toFixed(1)}s · ${status}`,
+        );
       }
 
       cb.onToolEnd(status, result);

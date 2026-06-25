@@ -471,6 +471,7 @@ export async function runRecurrentReasoning(
         signal: opts.signal,
         readOnly: false,
         cancelId: opts.runId,
+        traceTag: "execute",
       },
     );
     const exMs = performance.now() - exStart;
