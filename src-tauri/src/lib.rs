@@ -54,6 +54,15 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(entries)
 }
 
+/// Is `exe` resolvable on PATH? Used to prefer PowerShell 7 (pwsh) over Windows
+/// PowerShell for the agent's `run_command`, matching the integrated terminal.
+#[cfg(windows)]
+fn win_which(exe: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file()))
+        .unwrap_or(false)
+}
+
 #[derive(Serialize)]
 struct CommandOutput {
     stdout: String,
@@ -80,10 +89,16 @@ async fn run_command(
         #[cfg(windows)]
         let mut cmd = {
             use std::os::windows::process::CommandExt;
-            let mut c = std::process::Command::new("cmd");
-            c.args(["/C", &command]);
-            // CREATE_NO_WINDOW: run hidden so no console window pops up; output is
-            // still captured via the pipes and shown in the chat tool card.
+            // Run directly through PowerShell (same shell as the integrated
+            // terminal) instead of `cmd /C ...`. Going via cmd meant a
+            // `cmd → powershell` double-spawn, and the inner PowerShell flashed a
+            // visible console window on EVERY command (alarming, looks like
+            // malware). Spawning the shell directly with CREATE_NO_WINDOW keeps the
+            // whole invocation — and its child processes — hidden.
+            let shell = if win_which("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
+            let mut c = std::process::Command::new(shell);
+            c.args(["-NoProfile", "-NonInteractive", "-Command", &command]);
+            // CREATE_NO_WINDOW: no console window; output still captured via pipes.
             c.creation_flags(0x0800_0000);
             c
         };

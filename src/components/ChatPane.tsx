@@ -26,6 +26,7 @@ import {
 import { classifyTask } from "../lib/router";
 import {
   runAgent,
+  commandRisk,
   type AgentItem,
   type ToolStatus,
   type Todo,
@@ -89,8 +90,9 @@ function buildSystemPrompt(
 ): ApiMessage {
   return {
     role: "system",
-    content: `You are lokicode's coding agent embedded in a desktop code editor running on Windows (shell: cmd).
+    content: `You are lokicode's coding agent embedded in a desktop code editor running on Windows (shell: PowerShell).
 You can use the provided tools to read/list/write files and run shell commands to actually accomplish the user's request — not just describe it.
+run_command runs under PowerShell: prefer PowerShell syntax (e.g. Select-String, Get-Content, Get-ChildItem), use ; or separate calls instead of relying on cmd-only builtins, and prefer the read-only tools (read_file / grep_search / list_dir) over shelling out when they suffice.
 Operating principles:
 - Work from the GOAL and any CONSTRAINTS, not a fixed recipe: choose your own means, but never take irreversible actions beyond what was asked, and respect every stated constraint.
 - For non-trivial tasks, first state a brief plan with update_plan (current understanding, unknowns, steps) and keep exactly one step in_progress; update it as you go.
@@ -133,14 +135,12 @@ function toolLabel(name: string): string {
   );
 }
 
-// Heuristic: does this pending operation delete or irreversibly destroy data?
-// Used to surface an extra warning on the approval card. Errs toward warning.
+// Does this pending operation delete or irreversibly destroy data? Reuses the
+// agent's shared classifier so the red warning and the approval policy agree
+// (and a read-only command like `... | Format-Table` is never flagged).
 function isDestructive(name: string, args: Record<string, unknown>): boolean {
   if (name !== "run_command") return false;
-  const c = String(args.command ?? "");
-  return /(?:^|[\s&|;(])(rm|rmdir|rd|del|erase|unlink|shred|rimraf)(?:[\s/]|$)|remove-item|git\s+clean|git\s+reset\s+--hard|drop\s+(?:table|database)|\bformat\b|\bmkfs|\btruncate\b/i.test(
-    c,
-  );
+  return commandRisk(String(args.command ?? "")) === "destructive";
 }
 
 function StatusBadge({ status }: { status: ToolStatus }) {

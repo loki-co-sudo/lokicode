@@ -36,31 +36,70 @@ export const RISKY_TOOLS = new Set(["write_file", "run_command"]);
  *  - "auto"    : never prompt (most permissive) */
 export type ApprovalLevel = "manual" | "standard" | "auto";
 
+// Read-only inspection commands (and PowerShell cmdlets). If every piped/chained
+// segment of a command leads with one of these, the whole command is read-only —
+// checked FIRST so a safe command can't be misflagged by a substring (e.g. the
+// `Format-Table` cmdlet must not trip the disk-`format` rule).
+const READONLY_CMDS = new Set([
+  "ls", "dir", "cat", "type", "head", "tail", "less", "more", "grep", "egrep", "fgrep",
+  "findstr", "wc", "echo", "pwd", "stat", "file", "tree", "which", "where", "env",
+  "printenv", "date", "whoami", "basename", "dirname", "realpath", "cd", "clear", "cls",
+  "get-content", "get-childitem", "get-item", "get-itemproperty", "get-location",
+  "get-process", "get-command", "get-help", "get-date", "get-member", "select-string",
+  "select-object", "where-object", "measure-object", "sort-object", "group-object",
+  "format-table", "format-list", "format-wide", "out-string", "out-host", "write-output",
+  "write-host", "test-path", "resolve-path", "compare-object", "convertto-json",
+  "convertfrom-json",
+]);
+
+const GIT_READ_ONLY =
+  /^git\s+(status|log|diff|show|branch|remote|blame|rev-parse|describe|ls-files|ls-tree|cat-file|for-each-ref|name-rev|shortlog|reflog|tag|config|version|help)\b/i;
+const GIT_MUTATING =
+  /\bgit\s+(commit|push|pull|fetch|merge|rebase|reset|checkout|switch|restore|add|rm|mv|clean|cherry-pick|revert|apply|am|init|gc|prune|stash|update-ref|submodule)\b|\bgit\s+(branch|tag)\s+-(d|D)\b|\bgit\s+tag\s+-a\b|\bgit\s+remote\s+(add|remove|rm|set-url|rename)\b|\bgit\s+config\s+(?!--get|--list|-l\b)\S/i;
+
+function leadingName(seg: string): string {
+  const m = seg.trim().match(/^(\S+)/);
+  if (!m) return "";
+  return m[1].toLowerCase().replace(/\.exe$/, "").replace(/.*[\\/]/, "");
+}
+
+function segmentIsReadOnly(seg: string): boolean {
+  const s = seg.trim();
+  if (!s) return true;
+  const tok = leadingName(s);
+  if (tok === "powershell" || tok === "pwsh") {
+    const inner = s.match(/(?:-Command|-c)\s+(.+)$/i);
+    return inner ? isReadOnlyCommand(inner[1].replace(/^["']|["']$/g, "")) : false;
+  }
+  if (tok === "git") return GIT_READ_ONLY.test(s) && !GIT_MUTATING.test(s);
+  return READONLY_CMDS.has(tok);
+}
+
+function isReadOnlyCommand(command: string): boolean {
+  const segs = command
+    .split(/\|\||&&|[|;`\n]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return segs.length > 0 && segs.every(segmentIsReadOnly);
+}
+
 /** Classify a shell command for the "standard" approval policy. Errs toward the
  * safer label so an unrecognized command is treated as needing confirmation. */
 export function commandRisk(command: string): "safe" | "git-write" | "destructive" {
+  // Known read-only command → always safe (prevents false destructive matches).
+  if (isReadOnlyCommand(command)) return "safe";
   const c = command;
-  // Irreversible / data-losing operations.
+  // Irreversible / data-losing operations. `format` only counts as the disk
+  // formatter (`format C:` / Format-Volume), never the `Format-*` output cmdlets.
   if (
-    /(?:^|[\s&|;(])(rm|rmdir|rd|del|erase|unlink|shred|rimraf)(?:[\s/]|$)|remove-item|\bformat\b|\bmkfs|\btruncate\b|drop\s+(?:table|database)|>\s*\/dev\/sd|dd\s+if=/i.test(
+    /(?:^|[\s&|;(])(rm|rmdir|rd|del|erase|unlink|shred|rimraf|ri)(?:[\s/]|$)|\bremove-item\b|\bformat\s+[a-z]:|\bformat-volume\b|\bclear-content\b|\bmkfs\b|\btruncate\b|drop\s+(?:table|database)|>\s*\/dev\/sd|\bdd\s+if=/i.test(
       c,
     )
   ) {
     return "destructive";
   }
-  // git that changes repository state (commit/push/reset/checkout/clean/…). Plain
-  // read-only git (status/log/diff/show/branch list/remote -v/…) stays "safe".
-  if (/(?:^|[\s&|;(])git(?:\s|$)/i.test(c)) {
-    const gitWrite =
-      /\bgit\s+(commit|push|pull|fetch|merge|rebase|reset|checkout|switch|restore|add|rm|mv|clean|cherry-pick|revert|apply|am|init|gc|prune|stash|update-ref|submodule)\b/i.test(
-        c,
-      ) ||
-      /\bgit\s+(branch|tag)\s+-(d|D)\b/i.test(c) ||
-      /\bgit\s+tag\s+-a\b/i.test(c) ||
-      /\bgit\s+remote\s+(add|remove|rm|set-url|rename)\b/i.test(c) ||
-      /\bgit\s+config\s+(?!--get|--list|-l\b)\S/i.test(c);
-    if (gitWrite) return "git-write";
-  }
+  // git that changes repository state. Plain read-only git stays "safe".
+  if (/(?:^|[\s&|;(])git(?:\s|$)/i.test(c) && GIT_MUTATING.test(c)) return "git-write";
   return "safe";
 }
 
