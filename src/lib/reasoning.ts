@@ -335,6 +335,32 @@ export async function runRecurrentReasoning(
   // asked for breadth or depth); simple runs stay single-pass and fast.
   let ensemble = (opts.ensemble ?? true) && (breadth > 1 || depth >= 3);
 
+  // ── Timing instrumentation (visible in the F12 console as `[deepthink]`) ─────
+  // Each LLM round-trip is timed and tagged with its phase so the bottleneck is
+  // obvious from the log. A summary table is printed when the run ends.
+  const tStart = performance.now();
+  const timings: { phase: string; ms: number; model: string; tools: boolean }[] = [];
+  let phaseTag = "init";
+  const logSummary = () => {
+    const total = (performance.now() - tStart) / 1000;
+    const byPhase = new Map<string, { ms: number; calls: number }>();
+    for (const t of timings) {
+      const e = byPhase.get(t.phase) ?? { ms: 0, calls: 0 };
+      e.ms += t.ms;
+      e.calls += 1;
+      byPhase.set(t.phase, e);
+    }
+    const rows = [...byPhase.entries()]
+      .map(([phase, e]) => ({ phase, seconds: +(e.ms / 1000).toFixed(1), calls: e.calls }))
+      .sort((a, b) => b.seconds - a.seconds);
+    console.log(
+      `[deepthink] TOTAL ${total.toFixed(1)}s · ${timings.length} LLM calls · ` +
+        `ensemble=${ensemble} depth=${depth} breadth=${breadth} needsExec=${needsExec}`,
+    );
+    // eslint-disable-next-line no-console
+    console.table(rows);
+  };
+
   // A reasoning step: a tool-using agent mini-loop when useTools, else a plain
   // completion. `tools:false` forces a plain completion even in tool mode (for
   // planning / synthesis, which don't need to touch the machine).
@@ -343,8 +369,12 @@ export async function runRecurrentReasoning(
     model: string | undefined,
     o: { tools?: boolean; readOnly?: boolean } = {},
   ): Promise<string> => {
-    if (opts.useTools && o.tools !== false) {
-      return runAgent(
+    const start = performance.now();
+    const usesTools = opts.useTools && o.tools !== false;
+    const tag = phaseTag;
+    let result: string;
+    if (usesTools) {
+      result = await runAgent(
         messages,
         {
           onAssistantText: () => {},
@@ -362,37 +392,40 @@ export async function runRecurrentReasoning(
           cancelId: opts.runId,
         },
       );
+    } else {
+      const { content, usage } = await complete(messages, model, opts.runId);
+      cb.onUsage?.(usage);
+      result = content;
     }
-    const { content, usage } = await complete(messages, model, opts.runId);
-    cb.onUsage?.(usage);
-    return content;
+    const ms = performance.now() - start;
+    timings.push({ phase: tag, ms, model: model || "(default)", tools: usesTools });
+    console.log(
+      `[deepthink] ${tag} · ${(ms / 1000).toFixed(1)}s · ${model || "(default)"}${usesTools ? " · tools" : ""}`,
+    );
+    return result;
   };
 
   // ── Phase 0 — Does this task require real execution (side effects)? ──────────
-  // Deep-think is otherwise read-only and only produces text. When tools are on
-  // and the task needs writes/commands/git, we (a) lighten the heavy analysis so
-  // we don't burn 10+ slow strong-model calls before doing the actual work, and
-  // (b) run a real execution pass at the end (Phase F) that actually performs it.
+  // Deep-think's analysis loops are read-only. When tools are on and the task
+  // needs writes/commands/git, we skip the heavy read-only analysis and hand the
+  // plan straight to a real executor (fast path below) instead of producing — and
+  // possibly hallucinating — a "done" essay it cannot actually carry out.
   let needsExec = false;
   if (opts.useTools) {
+    phaseTag = "classify";
     const verdict = await think([...base, NEEDS_EXEC], thinking, { tools: false });
-    if (aborted()) return;
-    needsExec = /\b(yes|true)\b|はい/i.test(verdict.trim());
-    if (needsExec) {
-      ensemble = false;
-      depth = Math.min(depth, 2);
-      breadth = Math.min(breadth, 2);
-      cb.onThought(
-        "タスク種別",
-        thinkingLabel,
-        "実行を伴うタスクと判断。分析を軽量化し、最後に実際の操作（ファイル変更・コマンド実行）を行います。",
-      );
+    if (aborted()) {
+      logSummary();
+      return;
     }
+    needsExec = /\b(yes|true)\b|はい/i.test(verdict.trim());
   }
 
-  // ── Phase A — Solution brief (strong model designs intent + criteria + plan) ─
-  const briefText = await think([...base, BRIEF(breadth)], synthesis, { tools: false });
-  if (aborted()) return;
+  try {
+    // ── Phase A — Solution brief (strong model designs intent + criteria + plan)
+    phaseTag = "brief";
+    const briefText = await think([...base, BRIEF(breadth)], synthesis, { tools: false });
+    if (aborted()) return;
   const brief = parseBrief(briefText, breadth);
   cb.onThought("設計（ブリーフ）", synthLabel, briefText);
   // The brief anchors every later phase: investigation, the verifier's rubric,
@@ -414,6 +447,40 @@ export async function runRecurrentReasoning(
         ]
       : [];
 
+  // ── Fast path (plan→execute) ── Actionable tasks skip the read-only analysis
+  // loops (investigation/draft/verify/ensemble) entirely — the executor explores
+  // on demand with its own tools — and go straight from the plan to actually
+  // doing the work with approval. This is the big speed win for action tasks. ──
+  if (opts.useTools && needsExec) {
+    phaseTag = "execute";
+    cb.onThought("実行フェーズ", synthLabel, "計画に沿って実際の操作（編集・コマンド・git 等）を実行します…");
+    const exStart = performance.now();
+    const report = await runAgent(
+      [...base, ...briefMsgs, { role: "assistant", content: briefText }, EXECUTE],
+      {
+        onAssistantText: () => {},
+        onToolStart: cb.onToolStart,
+        onToolEnd: cb.onToolEnd,
+        approve: cb.approve,
+        onUsage: cb.onUsage,
+        onFileEdit: cb.onFileEdit,
+      },
+      {
+        autoApprove: opts.autoApprove,
+        model: synthesis,
+        signal: opts.signal,
+        readOnly: false,
+        cancelId: opts.runId,
+      },
+    );
+    const exMs = performance.now() - exStart;
+    timings.push({ phase: "execute", ms: exMs, model: synthesis || "(default)", tools: true });
+    console.log(`[deepthink] execute · ${(exMs / 1000).toFixed(1)}s · ${synthesis || "(default)"} · tools`);
+    if (aborted()) return;
+    cb.onFinal(report);
+    return;
+  }
+
   // ── Phase B — Investigation (cheap model, read-only, grounded) ──────────────
   const investigate = async (q: string, label: string): Promise<string> => {
     const r = await think([...base, ...briefMsgs, INVESTIGATOR, usr(`Sub-question: ${q}`)], thinking, {
@@ -424,6 +491,7 @@ export async function runRecurrentReasoning(
   };
 
   let evidence = "";
+  phaseTag = "investigate";
   if (breadth > 1 && brief.questions.length >= 2) {
     const qs = brief.questions;
     // Always parallel — investigations are read-only and independent, so this
@@ -436,6 +504,7 @@ export async function runRecurrentReasoning(
 
     // ── Phase B2 — Sufficiency gate (recursive): re-check after filling gaps so
     // newly-revealed gaps can also be covered, up to a bounded number of rounds. ─
+    phaseTag = "sufficiency";
     for (let round = 1; round <= MAX_SUFFICIENCY_ROUNDS; round++) {
       const suffText = await think(
         [...base, ...briefMsgs, sys(`収集された調査結果:\n\n${joinEvidence(findings)}`), SUFFICIENCY],
@@ -472,6 +541,7 @@ export async function runRecurrentReasoning(
   const ctx = [...briefMsgs, ...evidenceMsgs];
   const draftInstr = evidence ? DRAFT_FROM_EVIDENCE : DRAFT_PLAIN;
   let draft: string;
+  phaseTag = "draft";
   if (ensemble) {
     // Mixture-of-Agents: several independent drafts (parallel, plain) → merge.
     const proposals = await Promise.all(
@@ -504,6 +574,7 @@ export async function runRecurrentReasoning(
   // An independent judge scores the draft against the GOAL/CRITERIA each round;
   // we stop early once it passes (real signal, not a self-claim), and escalate
   // refinement to the strong model when the cheap model is stuck on a low score.
+  phaseTag = "verify";
   for (let k = 1; k <= depth; k++) {
     if (aborted()) return;
     // Strong verifier: the critic runs on the synthesis (strong) model so the
@@ -543,6 +614,7 @@ export async function runRecurrentReasoning(
   // ── Phase E — Final (strong model). On non-trivial tasks: best-of-N with the
   // strong model selecting/merging the best candidate (verifier selection). ────
   let final: string;
+  phaseTag = "final";
   if (ensemble) {
     const candidates = await Promise.all(
       Array.from({ length: ENSEMBLE_SAMPLES }, () =>
@@ -576,33 +648,7 @@ export async function runRecurrentReasoning(
     );
   }
   cb.onFinal(final);
-  if (aborted()) return;
-
-  // ── Phase F — Execution (plan→execute handoff). Deep-think only analyzes; when
-  // the task needs real changes and tools are enabled, hand the finished plan to
-  // a real agent loop that actually performs the writes/commands (with approval),
-  // then report what it really did — so it never just *claims* to have acted. ──
-  if (opts.useTools && needsExec) {
-    cb.onThought("実行フェーズ", synthLabel, "計画を実際の操作に移します（ファイル変更・コマンド実行・git 等）…");
-    const report = await runAgent(
-      [...base, ...briefMsgs, { role: "assistant", content: final }, EXECUTE],
-      {
-        onAssistantText: () => {},
-        onToolStart: cb.onToolStart,
-        onToolEnd: cb.onToolEnd,
-        approve: cb.approve,
-        onUsage: cb.onUsage,
-        onFileEdit: cb.onFileEdit,
-      },
-      {
-        autoApprove: opts.autoApprove,
-        model: synthesis,
-        signal: opts.signal,
-        readOnly: false,
-        cancelId: opts.runId,
-      },
-    );
-    if (aborted()) return;
-    cb.onFinal(report);
+  } finally {
+    logSummary();
   }
 }
