@@ -454,33 +454,10 @@ export default function App() {
         </svg>
         <span className="text-sm font-semibold tracking-wide text-neutral-100">lokicode</span>
         <button
-          onClick={() => setUpdateCheckNonce((n) => n + 1)}
-          className="ml-auto rounded px-2 py-0.5 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
-          title="更新を確認"
-        >
-          更新を確認
-        </button>
-        <button
-          onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
-          title="テーマ切替（ライト / ダーク）"
-          className="rounded p-1 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200"
-        >
-          {theme === "light" ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-            </svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
-            </svg>
-          )}
-        </button>
-        <button
           onClick={() => setChatOpen((v) => !v)}
           title={chatOpen ? "AI エージェントを隠す" : "AI エージェントを表示"}
           className={
-            "rounded p-1 hover:bg-neutral-700 " +
+            "ml-auto rounded p-1 hover:bg-neutral-700 " +
             (chatOpen ? "text-blue-400" : "text-neutral-400 hover:text-neutral-200")
           }
         >
@@ -509,7 +486,11 @@ export default function App() {
           }
         >
           <div className={sidebarView === "settings" ? "h-full" : "hidden"}>
-            <SettingsPane onSaved={() => setSettingsVersion((v) => v + 1)} />
+            <SettingsPane
+              onSaved={() => setSettingsVersion((v) => v + 1)}
+              theme={theme === "light" ? "light" : "dark"}
+              onThemeChange={setTheme}
+            />
           </div>
 
           {workspaceRoot ? (
