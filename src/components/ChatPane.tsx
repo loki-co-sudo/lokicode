@@ -132,6 +132,16 @@ function toolLabel(name: string): string {
   );
 }
 
+// Heuristic: does this pending operation delete or irreversibly destroy data?
+// Used to surface an extra warning on the approval card. Errs toward warning.
+function isDestructive(name: string, args: Record<string, unknown>): boolean {
+  if (name !== "run_command") return false;
+  const c = String(args.command ?? "");
+  return /(?:^|[\s&|;(])(rm|rmdir|rd|del|erase|unlink|shred|rimraf)(?:[\s/]|$)|remove-item|git\s+clean|git\s+reset\s+--hard|drop\s+(?:table|database)|\bformat\b|\bmkfs|\btruncate\b/i.test(
+    c,
+  );
+}
+
 function StatusBadge({ status }: { status: ToolStatus }) {
   const map: Record<ToolStatus, [string, string]> = {
     running: ["実行中", "text-blue-300"],
@@ -412,6 +422,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     return v >= 1 && v <= MAX_SAMPLES ? v : 1;
   });
   const [pending, setPending] = useState<PendingApproval | null>(null);
+  // On-demand "what does this do?" explanation for the pending approval.
+  const [explain, setExplain] = useState<{ loading: boolean; text: string } | null>(null);
+  useEffect(() => {
+    setExplain(null);
+  }, [pending]);
   const [pendingQuestion, setPendingQuestion] = useState<{
     question: string;
     resolve: (answer: string) => void;
@@ -1051,6 +1066,41 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setPending(null);
   }
 
+  // Ask the (cheap) thinking model to explain what the pending operation does,
+  // including side effects and risks, without running it. The card stays open.
+  async function explainPending() {
+    if (!pending) return;
+    const p = pending;
+    setExplain({ loading: true, text: "" });
+    const target =
+      p.name === "run_command"
+        ? `次のシェルコマンド（Windows・cmd）を実行しようとしています:\n\n${String(p.args.command ?? "")}`
+        : p.name === "write_file"
+          ? `次のファイルに書き込もうとしています: ${String(p.args.path ?? "")}\n\n書き込む内容（先頭のみ）:\n${String(p.args.content ?? "").slice(0, 4000)}`
+          : `次の操作 ${p.name} を引数 ${JSON.stringify(p.args)} で実行しようとしています。`;
+    const msgs: ApiMessage[] = [
+      {
+        role: "system",
+        content:
+          "あなたは慎重なエンジニアです。提示された操作が具体的に何をするのかを、副作用と" +
+          "リスク（特にデータの削除・上書き・不可逆な変更）を含めて日本語で簡潔に説明してください。" +
+          "3〜6行程度。前置きや確認の問いかけは不要、説明だけを出力してください。",
+      },
+      { role: "user", content: target },
+    ];
+    try {
+      const { content, usage } = await complete(
+        msgs,
+        effThinking || undefined,
+        runIdRef.current || undefined,
+      );
+      addUsage(usage);
+      setExplain({ loading: false, text: content.trim() || "（説明を取得できませんでした）" });
+    } catch (e) {
+      setExplain({ loading: false, text: "説明の取得に失敗しました: " + String(e) });
+    }
+  }
+
   function answerQuestion(answer: string) {
     pendingQuestion?.resolve(answer);
     setPendingQuestion(null);
@@ -1226,6 +1276,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           <p className="mb-1 font-medium text-amber-300">
             AI が次の操作を実行しようとしています（{toolLabel(pending.name)}）
           </p>
+          {isDestructive(pending.name, pending.args) && (
+            <p className="mb-2 rounded border border-red-600/60 bg-red-950/40 px-2 py-1 text-[11px] font-medium text-red-300">
+              🚨 削除・不可逆な操作の可能性があります。一度実行すると元に戻せないことがあります。内容を十分に確認してください。
+            </p>
+          )}
           <div className="mb-2">
             {pending.name === "write_file" ? (
               <DiffPreview
@@ -1240,7 +1295,24 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               </pre>
             )}
           </div>
-          <div className="flex justify-end gap-2">
+          {explain && (
+            <div className="mb-2 rounded border border-indigo-800/50 bg-indigo-950/30 px-2 py-2 text-[11px] text-neutral-200">
+              {explain.loading ? (
+                <span className="text-neutral-400">🔍 確認中…</span>
+              ) : (
+                <Markdown content={explain.text} />
+              )}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={explainPending}
+              disabled={explain?.loading}
+              title="このコマンド/変更が何をするのかを AI に説明させます（実行はしません）"
+              className="mr-auto rounded px-3 py-1 text-indigo-300 hover:bg-neutral-700 disabled:opacity-50"
+            >
+              🔍 これは何をする？
+            </button>
             <button onClick={() => resolveApproval(false)} className="rounded px-3 py-1 text-neutral-300 hover:bg-neutral-700">
               拒否
             </button>
