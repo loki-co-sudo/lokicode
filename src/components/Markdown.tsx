@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { memo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -42,7 +42,10 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-export default function Markdown({ content }: { content: string }) {
+// Memoized on `content`: parsing markdown + syntax highlighting is expensive, so
+// during streaming (which re-renders the whole message list on every token) only
+// the one bubble whose text actually changed re-parses — not every past message.
+function Markdown({ content }: { content: string }) {
   return (
     <div className="space-y-2 break-words text-sm leading-relaxed [&_a]:text-blue-400 [&_a]:underline [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5">
       <ReactMarkdown
@@ -97,3 +100,5 @@ export default function Markdown({ content }: { content: string }) {
     </div>
   );
 }
+
+export default memo(Markdown);

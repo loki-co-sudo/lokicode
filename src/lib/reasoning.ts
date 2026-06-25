@@ -11,7 +11,7 @@
 // See /specs/deep-reasoning-v2.md for the full design rationale.
 
 import { complete, type ApiMessage, type Usage } from "./openrouter";
-import { runAgent, type ToolStatus, type Todo } from "./agent";
+import { runAgent, type ToolStatus, type Todo, type ApprovalLevel } from "./agent";
 
 export interface ReasoningCallbacks {
   /** Emitted for the draft and each reflection (thinking phases). */
@@ -43,7 +43,8 @@ export interface ReasoningOptions {
   synthesisModel?: string;
   /** Let phases use tools (read/write/list/run/grep). */
   useTools: boolean;
-  autoApprove: boolean;
+  /** Approval policy for risky tools (passed through to the agent). */
+  approval: ApprovalLevel;
   /** Mixture-of-Agents (parallel proposer drafts + best-of-N final). Default on;
    * turn off to trade a little quality for speed/cost. */
   ensemble?: boolean;
@@ -397,7 +398,7 @@ export async function runRecurrentReasoning(
           onFileEdit: cb.onFileEdit,
         },
         {
-          autoApprove: opts.autoApprove,
+          approval: opts.approval,
           model,
           signal: opts.signal,
           readOnly: o.readOnly,
@@ -487,7 +488,7 @@ export async function runRecurrentReasoning(
         onFileEdit: cb.onFileEdit,
       },
       {
-        autoApprove: opts.autoApprove,
+        approval: opts.approval,
         model: exModel,
         signal: opts.signal,
         readOnly: false,

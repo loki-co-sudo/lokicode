@@ -29,6 +29,7 @@ import {
   type AgentItem,
   type ToolStatus,
   type Todo,
+  type ApprovalLevel,
 } from "../lib/agent";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -55,7 +56,7 @@ import {
   safeSetItem,
   type Thread,
 } from "../lib/chatStorage";
-import { usePersistentBool } from "../lib/usePersistentState";
+import { usePersistentBool, usePersistentString } from "../lib/usePersistentState";
 import Markdown from "./Markdown";
 import DiffPreview from "./DiffPreview";
 
@@ -408,7 +409,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [synthesisModel, setSynthesisModel] = useState("");
   const [includeFile, setIncludeFile] = usePersistentBool("lokicode.includeFile", false);
   const [agentMode, setAgentMode] = usePersistentBool("lokicode.agentMode", true);
-  const [autoApprove, setAutoApprove] = usePersistentBool("lokicode.autoApprove", false);
+  const [approvalLevel, setApprovalLevel] = usePersistentString(
+    "lokicode.approvalLevel",
+    "standard",
+  );
+  const approval = (approvalLevel as ApprovalLevel) || "standard";
   const [selfCheck, setSelfCheck] = usePersistentBool("lokicode.selfCheck", true);
   const [deepReasoning, setDeepReasoning] = usePersistentBool("lokicode.deepReasoning", false);
   const [ensemble, setEnsemble] = usePersistentBool("lokicode.ensemble", true);
@@ -603,18 +608,28 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setItems((prev) => [...prev, item]);
   }
 
-  // Stream assistant text into a growing bubble (creates one on the first chunk).
-  function handleAssistantDelta(chunk: string) {
+  // Stream assistant text into a growing bubble. Tokens are buffered and flushed
+  // at ~90ms intervals rather than per-token: each flush re-renders the message
+  // list (and re-parses that bubble's markdown), so batching cuts that from tens
+  // of times/sec to ~11/sec — the main fix for the UI freezing while responding.
+  const streamBufRef = useRef("");
+  const flushTimerRef = useRef<number | null>(null);
+
+  function flushStream() {
+    flushTimerRef.current = null;
+    const buf = streamBufRef.current;
+    if (!buf) return;
+    streamBufRef.current = "";
     setItems((prev) => {
       if (!streamingRef.current) {
         streamingRef.current = true;
-        return [...prev, { kind: "assistant", content: chunk }];
+        return [...prev, { kind: "assistant", content: buf }];
       }
       const next = [...prev];
       for (let i = next.length - 1; i >= 0; i--) {
         if (next[i].kind === "assistant") {
           const a = next[i] as Extract<AgentItem, { kind: "assistant" }>;
-          next[i] = { ...a, content: a.content + chunk };
+          next[i] = { ...a, content: a.content + buf };
           break;
         }
       }
@@ -622,7 +637,19 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     });
   }
 
+  function handleAssistantDelta(chunk: string) {
+    streamBufRef.current += chunk;
+    if (flushTimerRef.current == null) {
+      flushTimerRef.current = window.setTimeout(flushStream, 90);
+    }
+  }
+
   function handleAssistantDone() {
+    if (flushTimerRef.current != null) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    flushStream(); // flush any remaining buffered text
     streamingRef.current = false;
   }
 
@@ -842,7 +869,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             thinkingModel: effThinking || undefined,
             synthesisModel: synthesisModel || undefined,
             useTools: useAgent,
-            autoApprove,
+            approval,
             ensemble: effEnsemble,
             signal,
             runId,
@@ -880,7 +907,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           onFileEdit: recordFileEdit,
         };
         const agentOpts = {
-          autoApprove,
+          approval,
           signal,
           workspaceRoot: workspaceRoot ?? undefined,
           allowAskUser: true,
@@ -1364,13 +1391,32 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             title="ON: 依頼の難易度を自動判定し、チャット/Agent/ディープシンクを自動で振り分けます（易しい依頼を高速・低コストに）。Agent・ディープシンクトグルより優先。"
           />
           {agentMode && (
-            <Toggle
-              checked={autoApprove}
-              onChange={setAutoApprove}
-              accent="bg-amber-500"
-              label="自動承認"
-              title="承認なしで書き込み・コマンドを実行します（注意）。"
-            />
+            <div
+              className="flex items-center gap-1"
+              title="承認レベル：慎重＝書き込み・コマンドを毎回確認 / 標準＝編集や安全なコマンドは自動承認、破壊的操作と git の変更系（commit/push/reset 等）だけ確認 / 全自動＝確認なしで実行"
+            >
+              <span className="text-[11px] text-neutral-400">承認</span>
+              {(
+                [
+                  ["manual", "慎重"],
+                  ["standard", "標準"],
+                  ["auto", "全自動"],
+                ] as const
+              ).map(([v, label]) => (
+                <button
+                  key={v}
+                  onClick={() => setApprovalLevel(v)}
+                  className={
+                    "rounded px-1.5 py-0.5 text-[11px] " +
+                    (approval === v
+                      ? "bg-amber-600 text-white"
+                      : "bg-neutral-700 text-neutral-300 hover:bg-neutral-600")
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           )}
           {agentMode && !deepReasoning && (
             <Toggle

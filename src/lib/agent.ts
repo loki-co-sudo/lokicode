@@ -29,6 +29,59 @@ export type AgentItem =
 
 export const RISKY_TOOLS = new Set(["write_file", "run_command"]);
 
+/** Approval policy levels for risky tools:
+ *  - "manual"  : confirm every write_file / run_command (most cautious)
+ *  - "standard": auto-approve routine work (edits, builds, read-only commands)
+ *                but still confirm destructive commands and git-mutating commands
+ *  - "auto"    : never prompt (most permissive) */
+export type ApprovalLevel = "manual" | "standard" | "auto";
+
+/** Classify a shell command for the "standard" approval policy. Errs toward the
+ * safer label so an unrecognized command is treated as needing confirmation. */
+export function commandRisk(command: string): "safe" | "git-write" | "destructive" {
+  const c = command;
+  // Irreversible / data-losing operations.
+  if (
+    /(?:^|[\s&|;(])(rm|rmdir|rd|del|erase|unlink|shred|rimraf)(?:[\s/]|$)|remove-item|\bformat\b|\bmkfs|\btruncate\b|drop\s+(?:table|database)|>\s*\/dev\/sd|dd\s+if=/i.test(
+      c,
+    )
+  ) {
+    return "destructive";
+  }
+  // git that changes repository state (commit/push/reset/checkout/clean/…). Plain
+  // read-only git (status/log/diff/show/branch list/remote -v/…) stays "safe".
+  if (/(?:^|[\s&|;(])git(?:\s|$)/i.test(c)) {
+    const gitWrite =
+      /\bgit\s+(commit|push|pull|fetch|merge|rebase|reset|checkout|switch|restore|add|rm|mv|clean|cherry-pick|revert|apply|am|init|gc|prune|stash|update-ref|submodule)\b/i.test(
+        c,
+      ) ||
+      /\bgit\s+(branch|tag)\s+-(d|D)\b/i.test(c) ||
+      /\bgit\s+tag\s+-a\b/i.test(c) ||
+      /\bgit\s+remote\s+(add|remove|rm|set-url|rename)\b/i.test(c) ||
+      /\bgit\s+config\s+(?!--get|--list|-l\b)\S/i.test(c);
+    if (gitWrite) return "git-write";
+  }
+  return "safe";
+}
+
+/** Whether a tool call should pause for user approval under the given policy. */
+export function toolNeedsApproval(
+  level: ApprovalLevel,
+  name: string,
+  args: Record<string, unknown>,
+): boolean {
+  if (!RISKY_TOOLS.has(name)) return false;
+  if (level === "auto") return false;
+  if (level === "manual") return true;
+  // "standard": confirm only destructive / git-mutating commands; routine edits
+  // (write_file, which has one-click undo) and safe commands run unattended.
+  if (name === "run_command") {
+    const risk = commandRisk(String(args.command ?? ""));
+    return risk !== "safe";
+  }
+  return false; // write_file under "standard"
+}
+
 const MAX_RESULT_CHARS = 12000;
 
 interface CommandOutput {
@@ -278,7 +331,8 @@ export interface AgentCallbacks {
 }
 
 export interface AgentOptions {
-  autoApprove: boolean;
+  /** Approval policy for risky tools (write_file / run_command). */
+  approval: ApprovalLevel;
   /** Optional model override (used for cost-efficient routing in the reasoning core). */
   model?: string;
   /** Workspace root; default cwd for run_command and search root for grep_search. */
@@ -405,7 +459,7 @@ export async function runAgent(
       let status: ToolStatus = "done";
       let result = "";
 
-      if (RISKY_TOOLS.has(name) && !opts.autoApprove) {
+      if (toolNeedsApproval(opts.approval, name, args)) {
         console.log(`[${trace}]   tool ${name} · 承認待ち（ユーザーの操作待ち）…`);
         const ok = await cb.approve(name, args);
         if (!ok) {
