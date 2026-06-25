@@ -82,8 +82,8 @@ npm run tauri dev
 
 1. **API キー**：設定（⚙️）→ OpenRouter API キー。<https://openrouter.ai/keys> で取得。
 2. **モデル**：設定でモデルを選びます。一覧は OpenRouter から自動取得され、**コスト分類（無料/低/中/高/変動）・コンテキスト長・ツール対応**などで絞り込めます。
-   - **おすすめ（コスパ重視）**：ディープシンクの **思考モデル＝`openrouter/free`（無料・既定）**、**合成モデル＝高性能モデル**（例 `anthropic/claude-opus-4.8` や `deepseek/deepseek-v4-pro`）。
-   - 思考モデルは未設定なら自動で `openrouter/free` を使用します。
+   - **おすすめ（コスパ重視）**：ディープシンクの **思考モデル＝安価で賢い軽量モデル**（例 `deepseek/deepseek-v4-flash`。無料枠で試すなら `openrouter/free`）、**合成モデル＝高性能モデル**（例 `anthropic/claude-opus-4.8` や `deepseek/deepseek-v4-pro`）。
+   - 思考モデルは未設定なら自動で `openrouter/free`（既定）を使用します。コスパと品質のバランスを上げたいときは `deepseek/deepseek-v4-flash` 級の有料軽量モデルに切り替えると安定します。
 3. **モードを選ぶ**（チャット入力上のトグル）：
    - **Agent**：AI がツールでファイル読み書き・コマンド実行まで行う（既定）。**Chat** に切り替えると会話のみ。
    - **ディープシンク**：難しい調査・設計向けに多段階で考える（後述）。速度優先なら OFF、または「アンサンブル」OFF・「検証の深さ」を下げる。
