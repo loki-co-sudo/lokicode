@@ -3,6 +3,7 @@ name = "tauri-app"
 version = "0.63.0"
 description = "lokicode - VS Code-style editor with OpenRouter AI chat"
 authors = ["herok"]
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
