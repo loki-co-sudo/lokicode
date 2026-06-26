@@ -1,10 +1,12 @@
 import {
   forwardRef,
+  Profiler,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
+  type ProfilerOnRenderCallback,
 } from "react";
 import {
   streamChat,
@@ -653,6 +655,17 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     streamingRef.current = false;
   }
 
+  // Profiler for the chat list: logs a named `[render] chat …` line when a commit
+  // takes >40ms, so a `[jank]` stall can be attributed to chat re-rendering
+  // (markdown/highlight) vs. something else.
+  const onChatRender: ProfilerOnRenderCallback = (_id, phase, actualDuration) => {
+    if (actualDuration > 40) {
+      console.log(
+        `[render] chat ${Math.round(actualDuration)}ms · ${phase} · ${items.length} items`,
+      );
+    }
+  };
+
   // Replace the existing plan card (one evolving checklist) or append a new one.
   function handlePlan(todos: Todo[]) {
     setItems((prev) => {
@@ -1251,6 +1264,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        <Profiler id="chat" onRender={onChatRender}>
         {items.length === 0 && (
           <p className="mt-8 text-center text-sm text-neutral-600">
             コードの生成・編集やコマンド実行を AI に依頼できます。
@@ -1299,6 +1313,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             {error}
           </div>
         )}
+        </Profiler>
       </div>
 
       {pendingQuestion && <AskUserCard question={pendingQuestion.question} onAnswer={answerQuestion} />}
