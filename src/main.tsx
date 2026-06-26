@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
+import "./lib/monacoSetup"; // bundle Monaco locally (offline + strict CSP); must precede the editor
 import "./index.css";
 import "highlight.js/styles/github-dark.css";
 
