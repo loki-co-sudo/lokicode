@@ -99,7 +99,11 @@ export default function App() {
   // Whether the right-hand AI Agent pane is shown (collapsible like the sidebar).
   const [chatOpen, setChatOpen] = usePersistentBool("lokicode.chatOpen", true);
   // Bottom integrated terminal panel.
-  const [terminalOpen, setTerminalOpen] = usePersistentBool("lokicode.terminalOpen", false);
+  // Session-only (not persisted): the terminal always starts closed so no PTY is
+  // spawned during app startup. Auto-restoring it open made ConPTY create its
+  // backing conhost at launch, which briefly flashed a console window. Opening the
+  // terminal on demand (Ctrl+J) is unaffected.
+  const [terminalOpen, setTerminalOpen] = useState(false);
   // Auto-save: debounced write of the active tab after edits.
   const [autoSave, setAutoSave] = usePersistentBool("lokicode.autoSave", false);
   // Remember the last non-null sidebar view so Ctrl+B can reopen it.
