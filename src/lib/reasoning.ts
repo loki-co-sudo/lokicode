@@ -177,11 +177,12 @@ const NEEDS_EXEC = usr(
     "Reply with exactly YES or NO.",
 );
 
-// Execution phase instruction: hand the finished plan to a real tool-using agent.
+// Execution phase instruction: hand the plan to a real tool-using agent.
 const EXECUTE = usr(
-  "上の分析・計画は完成しています。ここからは説明ではなく『実行』です。\n" +
-    "最初に update_plan で具体的な手順（3〜7個程度）のチェックリストを作り、進めながら逐次" +
-    "更新してください（ユーザーは進捗をこのチェックリストで見ています）。\n" +
+  "上の計画（設計ブリーフ）はまだ実行されていません。ここからは説明ではなく『実行』です。\n" +
+    "**最初のターンから必ずツールを使ってください。テキストだけで返して終了してはいけません。**\n" +
+    "まず update_plan で具体的な手順（3〜7個程度）のチェックリストを作り、進めながら逐次更新" +
+    "してください（ユーザーは進捗をこのチェックリストで見ています）。\n" +
     "そのうえで、計画に沿ってツール（read_file / write_file / run_command / grep_search 等）で" +
     "実際にファイルを変更し、必要なコマンドを実行してタスクを完了させてください。\n" +
     "効率重視で、最小手数で終わらせること: ねらいが明確なら独立した操作は1ターンで複数まとめて" +
@@ -191,6 +192,14 @@ const EXECUTE = usr(
     "目的を達成したら、それ以上ツールを呼ばずに完了とし、実際に行った操作（変更したファイル名、" +
     "実行したコマンドとその結果）だけを簡潔に報告してください。できなかったこと・失敗したことは" +
     "正直に書くこと。",
+);
+
+// Firmer re-prompt when the executor stopped without using any tool.
+const EXECUTE_FORCE = usr(
+  "あなたはまだ実際の作業を何も行っていません（ツールを1つも使っていません）。説明や意図の" +
+    "表明だけで終わらせず、いますぐ update_plan と read_file / write_file / run_command 等の" +
+    "ツールを使って、計画を実際に実行してタスクを完了させてください。最初の応答で必ずツールを" +
+    "呼ぶこと。",
 );
 
 // Appended to the analysis FINAL/SELECT so the synthesizer never claims it has
@@ -471,38 +480,48 @@ export async function runRecurrentReasoning(
     // The executor runs on the cheap/fast thinking model (the strong model already
     // produced the plan): execution is mostly mechanical tool-driving, so this cuts
     // per-step latency a lot. Wire the full agent UI hooks (plan checklist +
-    // streaming narration + tool cards) so the user can see what it's doing and how
-    // far along it is — the streamed turns are the answer, so we don't re-emit it.
+    // streaming narration + tool cards) so the user can see what it's doing.
     const exModel = thinking ?? synthesis;
-    const report = await runAgent(
-      [...base, ...briefMsgs, { role: "assistant", content: briefText }, EXECUTE],
-      {
-        onAssistantText: (t) => cb.onFinal(t),
-        onAssistantDelta: cb.onAssistantDelta,
-        onAssistantDone: cb.onAssistantDone,
-        onPlan: cb.onPlan,
-        onToolStart: cb.onToolStart,
-        onToolEnd: cb.onToolEnd,
-        approve: cb.approve,
-        onUsage: cb.onUsage,
-        onFileEdit: cb.onFileEdit,
+    // Pass the plan as SYSTEM context, not as an `assistant` message — otherwise a
+    // weak executor sees a finished assistant answer and stops immediately ("done"
+    // with no tool calls). `toolCount` tracks whether it actually did any work.
+    let toolCount = 0;
+    const execCb = {
+      onAssistantText: (t: string) => cb.onFinal(t),
+      onAssistantDelta: cb.onAssistantDelta,
+      onAssistantDone: cb.onAssistantDone,
+      onPlan: cb.onPlan,
+      onToolStart: (c: { name: string; args: Record<string, unknown> }) => {
+        toolCount++;
+        cb.onToolStart(c);
       },
-      {
-        approval: opts.approval,
-        model: exModel,
-        signal: opts.signal,
-        readOnly: false,
-        cancelId: opts.runId,
-        traceTag: "execute",
-      },
-    );
+      onToolEnd: cb.onToolEnd,
+      approve: cb.approve,
+      onUsage: cb.onUsage,
+      onFileEdit: cb.onFileEdit,
+    };
+    const execOpts = {
+      approval: opts.approval,
+      model: exModel,
+      signal: opts.signal,
+      readOnly: false,
+      cancelId: opts.runId,
+      traceTag: "execute",
+    };
+    const planMsg = sys(`実行する計画（設計ブリーフ。これに沿って実際に作業すること）:\n\n${briefText}`);
+    await runAgent([...base, ...briefMsgs, planMsg, EXECUTE], execCb, execOpts);
+
+    // Guard against premature no-op stops: if the executor finished without using
+    // any tool, it just narrated intent instead of acting — nudge it once to do
+    // the work for real (firmer instruction).
+    if (!aborted() && toolCount === 0) {
+      cb.onThought("実行の再指示", thinkingLabel, "ツールを使わず終了したため、実際に作業するよう再指示します。");
+      await runAgent([...base, ...briefMsgs, planMsg, EXECUTE_FORCE], execCb, execOpts);
+    }
+
     const exMs = performance.now() - exStart;
     timings.push({ phase: "execute", ms: exMs, model: exModel || "(default)", tools: true });
     console.log(`[deepthink] execute · ${(exMs / 1000).toFixed(1)}s · ${exModel || "(default)"} · tools`);
-    // The executor's turns are shown live (streamed bubbles / onAssistantText →
-    // onFinal), so we don't re-emit `report` here — that would duplicate the
-    // final answer. `void report` keeps it explicit that the value is intentional.
-    void report;
     return;
   }
 

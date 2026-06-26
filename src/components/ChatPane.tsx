@@ -666,15 +666,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     }
   };
 
-  // Replace the existing plan card (one evolving checklist) or append a new one.
+  // One evolving checklist: drop the previous plan card and append the latest at
+  // the END, so each update re-appears next to the current activity (no scrolling
+  // back up to the spot where the plan was first created).
   function handlePlan(todos: Todo[]) {
-    setItems((prev) => {
-      const idx = prev.map((it) => it.kind).lastIndexOf("plan");
-      if (idx === -1) return [...prev, { kind: "plan", todos }];
-      const next = [...prev];
-      next[idx] = { kind: "plan", todos };
-      return next;
-    });
+    setItems((prev) => [...prev.filter((it) => it.kind !== "plan"), { kind: "plan", todos }]);
   }
 
   function updateLastTool(status: ToolStatus, result: string) {
