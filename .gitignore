@@ -27,3 +27,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code local/runtime files (machine-specific; not for the repo)
+.claude/settings.json
+.claude/settings.local.json
+.claude/*.lock
