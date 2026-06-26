@@ -298,12 +298,17 @@ async function execTool(
       const entries = await invoke("list_dir", { path: String(args.path) });
       return JSON.stringify(entries);
     }
-    case "write_file":
+    case "write_file": {
+      // Models occasionally prefix the content with a UTF-8 BOM (U+FEFF),
+      // which corrupts the first line (e.g. a Markdown heading) and dirties
+      // diffs. Strip a single leading BOM defensively before writing.
+      const content = String(args.content ?? "").replace(/^\uFEFF/, "");
       await invoke("write_text_file", {
         path: String(args.path),
-        contents: String(args.content ?? ""),
+        contents: content,
       });
       return `書き込み完了: ${args.path}`;
+    }
     case "run_command": {
       const out = await invoke<CommandOutput>("run_command", {
         command: String(args.command),
