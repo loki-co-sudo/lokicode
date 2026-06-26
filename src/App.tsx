@@ -27,7 +27,7 @@ import {
   joinPath,
 } from "./lib/files";
 import { listFiles } from "./lib/search";
-import { addRecentFile, addRecentFolder, recentFolders } from "./lib/recent";
+import { addRecentFile, addRecentFolder, recentFiles, recentFolders } from "./lib/recent";
 import { safeSetItem } from "./lib/chatStorage";
 import { loadKeybindings, comboFromEvent, type ActionId } from "./lib/keybindings";
 
@@ -542,6 +542,24 @@ export default function App() {
                       <button
                         key={p}
                         onClick={() => openFolderPath(p)}
+                        title={p}
+                        className="block w-full truncate rounded px-2 py-1 text-left text-neutral-300 hover:bg-neutral-800"
+                      >
+                        {fileNameFromPath(p) || p}
+                        <span className="ml-1 text-neutral-600">{p}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {recentFiles().length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+                      最近開いたファイル
+                    </div>
+                    {recentFiles().map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => openPath(p)}
                         title={p}
                         className="block w-full truncate rounded px-2 py-1 text-left text-neutral-300 hover:bg-neutral-800"
                       >
