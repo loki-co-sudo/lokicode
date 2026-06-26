@@ -46,6 +46,7 @@ import {
   loadCalib,
   recordCompletion,
   recordToolRun,
+  structuralCalls,
 } from "../lib/cost";
 import {
   ensureActiveThread,
@@ -1024,12 +1025,15 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     } finally {
       if (signal.aborted) appendItem({ kind: "assistant", content: "_（停止しました）_" });
       // Calibrate the tool multiplier from this run, then refresh the estimate.
-      // Structural agent-loop count of the pipeline: investigate(b) + draft +
-      // verify(D) + final ≈ breadth + depth + 2 (plan is a plain completion).
+      // Use cost.ts's pipeline model (the single source of truth) so the learned
+      // multiplier is measured against exactly the loop-call count the estimate
+      // multiplies it by: observed loop round-trips = total calls minus the
+      // structural plain completions. (An execute fast-path run has a different
+      // shape, so this stays an approximation that the EWMA smooths.)
       if (useDeep && useAgent) {
-        const breadth = Math.max(1, effSamples);
-        const structural = (breadth > 1 ? breadth : 0) + effDepth + 2;
-        recordToolRun(callCountRef.current, structural);
+        const { loop, plain } = structuralCalls(effDepth, effSamples, true);
+        const actualLoop = Math.max(1, callCountRef.current - plain);
+        recordToolRun(actualLoop, loop);
       }
       clearRun(runId);
       setCalib(loadCalib());

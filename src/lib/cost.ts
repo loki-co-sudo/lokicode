@@ -109,6 +109,63 @@ export interface EstimateParams {
   calib?: Calib;
 }
 
+/** Per-phase structural call counts of the orchestrated pipeline
+ * (see lib/reasoning.ts):
+ *   [classify(cheap, tools only)] → brief(strong) → investigate ×b + sufficiency
+ *   (cheap, b>1) → draft(cheap) → judge ×D + refine ×D (cheap) → final(strong).
+ * On non-trivial tasks (ensemble) the draft and final become Mixture-of-Agents:
+ *   draft = N proposers + 1 merge (cheap, plain); final = N candidates + 1 select.
+ * This is the SINGLE source of truth shared by the cost estimate and the live
+ * tool-multiplier calibration, so the two can never drift apart. "loop" phases
+ * run as tool-using agent mini-loops (and so inflate by the learned toolMult);
+ * every other phase is one plain completion. */
+export interface PipelineShape {
+  classify: number;
+  brief: number;
+  invest: number;
+  suff: number;
+  judge: number;
+  refine: number;
+  draftLoop: number;
+  draftPlain: number;
+  finalLoop: number;
+  finalPlain: number;
+}
+
+export function pipelineShape(depth: number, samples: number, useTools: boolean): PipelineShape {
+  const breadth = Math.max(1, Math.min(5, Math.floor(samples)));
+  const d = Math.max(0, Math.floor(depth));
+  const ensemble = breadth > 1 || d >= 3;
+  const N = 2; // ENSEMBLE_SAMPLES
+  return {
+    classify: useTools ? 1 : 0,
+    brief: 1,
+    invest: breadth > 1 ? breadth : 0,
+    suff: breadth > 1 ? 1 : 0,
+    judge: d,
+    refine: d,
+    draftLoop: ensemble ? 0 : 1,
+    draftPlain: ensemble ? N + 1 : 0,
+    finalLoop: ensemble ? 0 : 1,
+    finalPlain: ensemble ? N + 1 : 0,
+  };
+}
+
+/** Agent-loop vs plain structural call totals — the calibration divides observed
+ * loop round-trips by `loop` to learn the tool multiplier, exactly the count the
+ * estimate multiplies by it. */
+export function structuralCalls(
+  depth: number,
+  samples: number,
+  useTools: boolean,
+): { loop: number; plain: number } {
+  const s = pipelineShape(depth, samples, useTools);
+  return {
+    loop: s.invest + s.refine + s.draftLoop + s.finalLoop,
+    plain: s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain,
+  };
+}
+
 export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const t = p.thinking;
   const s = p.synthesis;
@@ -121,29 +178,8 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
 
   const thinkOut = calib.outTokens;
   const synthOut = Math.round(calib.outTokens * SYNTH_PREMIUM);
-  const breadth = Math.max(1, Math.min(5, Math.floor(p.samples))); // investigation angles
-  const depth = Math.max(0, p.depth); // verify/refine rounds
   const mult = p.useTools ? calib.toolMult : 1;
-
-  // Structural call counts of the orchestrated pipeline (see lib/reasoning.ts):
-  //   [classify(cheap, tools only)] → brief(strong) → investigate ×b + sufficiency
-  //   (cheap, b>1) → draft(cheap) → judge ×D + refine ×D (cheap) → final(strong).
-  // On non-trivial tasks (ensemble) the draft and final become Mixture-of-Agents:
-  //   draft = N proposers + 1 merge (cheap, plain);
-  //   final = N candidates + 1 select (strong, plain).
-  const ensemble = breadth > 1 || depth >= 3;
-  const N = 2; // ENSEMBLE_SAMPLES
-
-  const classifyCalls = p.useTools ? 1 : 0; // NEEDS_EXEC gate, cheap plain
-  const briefCalls = 1; // strong, short
-  const investCalls = breadth > 1 ? breadth : 0; // cheap, tool loop
-  const suffCalls = breadth > 1 ? 1 : 0; // cheap, plain
-  const judgeCalls = depth; // STRONG, plain (strong verifier)
-  const refineCalls = depth; // cheap, tool loop (early-stop often fewer)
-  const draftLoop = ensemble ? 0 : 1; // single draft is a tool loop
-  const draftPlain = ensemble ? N + 1 : 0; // proposers + merge (plain)
-  const finalLoop = ensemble ? 0 : 1; // single final is a strong tool loop
-  const finalPlain = ensemble ? N + 1 : 0; // candidates + select (strong, plain)
+  const sh = pipelineShape(p.depth, p.samples, p.useTools);
 
   // Guard against negative / non-finite prices (e.g. a "-1" variable-price
   // sentinel) so the estimate can never go absurdly negative.
@@ -153,18 +189,17 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const synthPer = inTok * px(s.promptPrice) + synthOut * px(s.completionPrice);
 
   // Agent-loop phases carry the tool multiplier; plain completions do not.
-  const cheapLoop = investCalls + refineCalls + draftLoop;
-  const cheapPlain = classifyCalls + suffCalls + draftPlain;
-  const strongLoop = finalLoop;
-  const strongPlain = briefCalls + finalPlain + judgeCalls; // judge runs on the strong model
+  const cheapLoop = sh.invest + sh.refine + sh.draftLoop;
+  const cheapPlain = sh.classify + sh.suff + sh.draftPlain;
+  const strongLoop = sh.finalLoop;
+  const strongPlain = sh.brief + sh.finalPlain + sh.judge; // judge runs on the strong model
   const usd =
     strongPlain * synthPer +
     strongLoop * synthPer * mult +
     cheapLoop * thinkPer * mult +
     cheapPlain * thinkPer;
 
-  const baseCalls =
-    classifyCalls + briefCalls + investCalls + suffCalls + judgeCalls + refineCalls + draftLoop + draftPlain + finalLoop + finalPlain;
+  const baseCalls = cheapLoop + cheapPlain + strongLoop + strongPlain;
   const calls = p.useTools
     ? Math.round((cheapLoop + strongLoop) * mult + cheapPlain + strongPlain)
     : baseCalls;
