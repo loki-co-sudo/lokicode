@@ -55,9 +55,10 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
 }
 
 /// Is `exe` resolvable on PATH? Used to prefer PowerShell 7 (pwsh) over Windows
-/// PowerShell for the agent's `run_command`, matching the integrated terminal.
+/// PowerShell both for the agent's `run_command` and the integrated terminal
+/// (terminal.rs reuses this so the two stay in lockstep).
 #[cfg(windows)]
-fn win_which(exe: &str) -> bool {
+pub(crate) fn win_which(exe: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(exe).is_file()))
         .unwrap_or(false)
@@ -177,7 +178,6 @@ pub fn run() {
             list_dir,
             run_command,
             openrouter::send_chat,
-            openrouter::chat_once,
             openrouter::chat_once_stream,
             openrouter::complete,
             openrouter::cancel_run,

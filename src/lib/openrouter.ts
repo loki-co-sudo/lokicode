@@ -55,29 +55,16 @@ export function clearRun(id: number): void {
   void invoke("clear_run", { id }).catch(() => {});
 }
 
-/** One non-streaming completion with tool-calling support (optional model override). */
-export function chatOnce(
-  messages: ApiMessage[],
-  tools: unknown[],
-  model?: string,
-  cancelId?: number,
-): Promise<ChatOnceResult> {
-  return invoke<ChatOnceResult>("chat_once", {
-    messages,
-    tools,
-    model: model ?? null,
-    cancelId: cancelId ?? null,
-  });
-}
-
 type AgentStreamEvent =
   | { type: "delta"; content: string }
   | { type: "done"; message: ApiMessage; usage: Usage }
   | { type: "error"; message: string };
 
 /**
- * Streaming variant of {@link chatOnce}: `onDelta` fires with text as it streams;
- * resolves with the assembled assistant message (incl. tool calls) and usage.
+ * One streamed agent turn with tool-calling support (optional model override):
+ * `onDelta` fires with text as it streams; resolves with the assembled assistant
+ * message (incl. tool calls) and usage. This is the only completion path the
+ * agent loop uses.
  */
 export function chatOnceStream(
   messages: ApiMessage[],

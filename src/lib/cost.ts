@@ -126,14 +126,15 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const mult = p.useTools ? calib.toolMult : 1;
 
   // Structural call counts of the orchestrated pipeline (see lib/reasoning.ts):
-  //   brief(strong) → investigate ×b + sufficiency (cheap, b>1)
-  //   → draft(cheap) → judge ×D + refine ×D (cheap) → final(strong).
+  //   [classify(cheap, tools only)] → brief(strong) → investigate ×b + sufficiency
+  //   (cheap, b>1) → draft(cheap) → judge ×D + refine ×D (cheap) → final(strong).
   // On non-trivial tasks (ensemble) the draft and final become Mixture-of-Agents:
   //   draft = N proposers + 1 merge (cheap, plain);
   //   final = N candidates + 1 select (strong, plain).
   const ensemble = breadth > 1 || depth >= 3;
   const N = 2; // ENSEMBLE_SAMPLES
 
+  const classifyCalls = p.useTools ? 1 : 0; // NEEDS_EXEC gate, cheap plain
   const briefCalls = 1; // strong, short
   const investCalls = breadth > 1 ? breadth : 0; // cheap, tool loop
   const suffCalls = breadth > 1 ? 1 : 0; // cheap, plain
@@ -153,7 +154,7 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
 
   // Agent-loop phases carry the tool multiplier; plain completions do not.
   const cheapLoop = investCalls + refineCalls + draftLoop;
-  const cheapPlain = suffCalls + draftPlain;
+  const cheapPlain = classifyCalls + suffCalls + draftPlain;
   const strongLoop = finalLoop;
   const strongPlain = briefCalls + finalPlain + judgeCalls; // judge runs on the strong model
   const usd =
@@ -163,7 +164,7 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
     cheapPlain * thinkPer;
 
   const baseCalls =
-    briefCalls + investCalls + suffCalls + judgeCalls + refineCalls + draftLoop + draftPlain + finalLoop + finalPlain;
+    classifyCalls + briefCalls + investCalls + suffCalls + judgeCalls + refineCalls + draftLoop + draftPlain + finalLoop + finalPlain;
   const calls = p.useTools
     ? Math.round((cheapLoop + strongLoop) * mult + cheapPlain + strongPlain)
     : baseCalls;

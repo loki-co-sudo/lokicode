@@ -103,10 +103,6 @@ export function ensureActiveThread(): string {
   return fallback;
 }
 
-export function getActiveThreadId(): string {
-  return ensureActiveThread();
-}
-
 export function setActiveThreadId(id: string) {
   localStorage.setItem(ACTIVE_KEY, id);
 }

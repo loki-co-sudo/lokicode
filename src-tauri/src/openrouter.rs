@@ -120,6 +120,32 @@ fn is_default_base(base: &str) -> bool {
     base.starts_with("https://openrouter.ai")
 }
 
+/// Resolve the API base and key for a request, enforcing that a key exists when
+/// the target is OpenRouter itself (a custom OpenAI-compatible base — e.g. a
+/// local Ollama — may legitimately need no key). Shared by every completion
+/// command so the "key missing" guard lives in exactly one place.
+fn resolve_auth(app: &AppHandle) -> Result<(String, Option<String>), String> {
+    let base = resolve_base(app);
+    let key = resolve_key(app);
+    if key.is_none() && is_default_base(&base) {
+        return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
+    }
+    Ok((base, key))
+}
+
+/// Apply lokicode's identifying headers and (when present) bearer auth to a
+/// request builder. Centralizes the header/auth boilerplate every endpoint used
+/// to repeat.
+fn with_auth(req: reqwest::RequestBuilder, key: &Option<String>) -> reqwest::RequestBuilder {
+    let req = req
+        .header("HTTP-Referer", "http://localhost")
+        .header("X-Title", "lokicode");
+    match key {
+        Some(k) => req.bearer_auth(k),
+        None => req,
+    }
+}
+
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     Ok(dir.join("openrouter.json"))
@@ -250,15 +276,7 @@ pub struct ModelInfo {
 pub async fn list_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
     let base = resolve_base(&app);
     let key = resolve_key(&app);
-    let client = reqwest::Client::new();
-    let mut req = client
-        .get(format!("{base}/models"))
-        .header("HTTP-Referer", "http://localhost")
-        .header("X-Title", "lokicode");
-    if let Some(k) = &key {
-        req = req.bearer_auth(k);
-    }
-    let resp = req
+    let resp = with_auth(reqwest::Client::new().get(format!("{base}/models")), &key)
         .send()
         .await
         .map_err(|e| format!("通信エラー: {e}"))?;
@@ -320,11 +338,7 @@ pub async fn complete(
     model: Option<String>,
     cancel_id: Option<u64>,
 ) -> Result<CompleteResult, String> {
-    let base = resolve_base(&app);
-    let key = resolve_key(&app);
-    if key.is_none() && is_default_base(&base) {
-        return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
-    }
+    let (base, key) = resolve_auth(&app)?;
     let model = model
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| resolve_model(&app));
@@ -335,15 +349,12 @@ pub async fn complete(
         "usage": { "include": true },
     });
 
-    let client = reqwest::Client::new();
-    let mut req = client
-        .post(format!("{base}/chat/completions"))
-        .header("HTTP-Referer", "http://localhost")
-        .header("X-Title", "lokicode")
-        .json(&body);
-    if let Some(k) = &key {
-        req = req.bearer_auth(k);
-    }
+    let req = with_auth(
+        reqwest::Client::new()
+            .post(format!("{base}/chat/completions"))
+            .json(&body),
+        &key,
+    );
     let work = async move {
         let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
         let status = resp.status();
@@ -377,73 +388,6 @@ pub struct CompleteResult {
     usage: Usage,
 }
 
-/// One non-streaming completion that supports tool calling. Returns the raw
-/// assistant message (which may contain `content` and/or `tool_calls`). The agent
-/// loop on the frontend drives the multi-step tool use.
-#[tauri::command]
-pub async fn chat_once(
-    app: AppHandle,
-    messages: serde_json::Value,
-    tools: serde_json::Value,
-    model: Option<String>,
-    cancel_id: Option<u64>,
-) -> Result<ChatOnceResult, String> {
-    let base = resolve_base(&app);
-    let key = resolve_key(&app);
-    if key.is_none() && is_default_base(&base) {
-        return Err("APIキーが未設定です。右上の設定からキーを入力してください。".to_string());
-    }
-    let model = model
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| resolve_model(&app));
-
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "usage": { "include": true },
-    });
-    if tools.as_array().is_some_and(|a| !a.is_empty()) {
-        body["tools"] = tools;
-        body["tool_choice"] = serde_json::json!("auto");
-    }
-
-    let client = reqwest::Client::new();
-    let mut req = client
-        .post(format!("{base}/chat/completions"))
-        .header("HTTP-Referer", "http://localhost")
-        .header("X-Title", "lokicode")
-        .json(&body);
-    if let Some(k) = &key {
-        req = req.bearer_auth(k);
-    }
-    let work = async move {
-        let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
-            return Err(format!("API エラー (HTTP {status}): {detail}"));
-        }
-        Ok(ChatOnceResult {
-            message: json["choices"][0]["message"].clone(),
-            usage: extract_usage(&json),
-        })
-    };
-    tokio::select! {
-        r = work => r,
-        _ = wait_cancelled(&app, cancel_id) => Ok(ChatOnceResult {
-            message: serde_json::json!({ "role": "assistant", "content": "" }),
-            usage: Usage::default(),
-        }),
-    }
-}
-
-#[derive(Serialize)]
-pub struct ChatOnceResult {
-    message: serde_json::Value,
-    usage: Usage,
-}
-
 /// Streamed agent turn: text deltas arrive live; the assembled assistant message
 /// (content + tool_calls) and usage are delivered in the final `Done` event.
 #[derive(Serialize, Clone)]
@@ -454,8 +398,9 @@ pub enum AgentStreamEvent {
     Error { message: String },
 }
 
-/// Like `chat_once` but streams assistant text as it is generated. Tool calls are
-/// accumulated from the stream and returned whole in the `Done` event.
+/// One agent turn (tool-calling supported) that streams assistant text as it is
+/// generated; tool calls are accumulated from the stream and returned whole in the
+/// `Done` event. This is the sole completion path the agent loop drives.
 #[tauri::command]
 pub async fn chat_once_stream(
     app: AppHandle,
@@ -465,13 +410,13 @@ pub async fn chat_once_stream(
     cancel_id: Option<u64>,
     on_event: Channel<AgentStreamEvent>,
 ) -> Result<(), String> {
-    let base = resolve_base(&app);
-    let key = resolve_key(&app);
-    if key.is_none() && is_default_base(&base) {
-        let msg = "APIキーが未設定です。右上の設定からキーを入力してください。".to_string();
-        let _ = on_event.send(AgentStreamEvent::Error { message: msg.clone() });
-        return Err(msg);
-    }
+    let (base, key) = match resolve_auth(&app) {
+        Ok(v) => v,
+        Err(msg) => {
+            let _ = on_event.send(AgentStreamEvent::Error { message: msg.clone() });
+            return Err(msg);
+        }
+    };
     let model = model
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| resolve_model(&app));
@@ -488,15 +433,12 @@ pub async fn chat_once_stream(
         body["tool_choice"] = serde_json::json!("auto");
     }
 
-    let client = reqwest::Client::new();
-    let mut req = client
-        .post(format!("{base}/chat/completions"))
-        .header("HTTP-Referer", "http://localhost")
-        .header("X-Title", "lokicode")
-        .json(&body);
-    if let Some(k) = &key {
-        req = req.bearer_auth(k);
-    }
+    let req = with_auth(
+        reqwest::Client::new()
+            .post(format!("{base}/chat/completions"))
+            .json(&body),
+        &key,
+    );
     let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
 
     if !resp.status().is_success() {
@@ -625,13 +567,13 @@ pub async fn send_chat(
     messages: Vec<ChatMessage>,
     on_event: Channel<StreamEvent>,
 ) -> Result<(), String> {
-    let base = resolve_base(&app);
-    let key = resolve_key(&app);
-    if key.is_none() && is_default_base(&base) {
-        let msg = "APIキーが未設定です。右上の設定からキーを入力してください。".to_string();
-        let _ = on_event.send(StreamEvent::Error { message: msg.clone() });
-        return Err(msg);
-    }
+    let (base, key) = match resolve_auth(&app) {
+        Ok(v) => v,
+        Err(msg) => {
+            let _ = on_event.send(StreamEvent::Error { message: msg.clone() });
+            return Err(msg);
+        }
+    };
     let model = resolve_model(&app);
 
     let body = serde_json::json!({
@@ -640,15 +582,12 @@ pub async fn send_chat(
         "stream": true,
     });
 
-    let client = reqwest::Client::new();
-    let mut req = client
-        .post(format!("{base}/chat/completions"))
-        .header("HTTP-Referer", "http://localhost")
-        .header("X-Title", "lokicode")
-        .json(&body);
-    if let Some(k) = &key {
-        req = req.bearer_auth(k);
-    }
+    let req = with_auth(
+        reqwest::Client::new()
+            .post(format!("{base}/chat/completions"))
+            .json(&body),
+        &key,
+    );
     let resp = req.send().await.map_err(|e| format!("通信エラー: {e}"))?;
 
     if !resp.status().is_success() {
