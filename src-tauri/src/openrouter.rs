@@ -635,3 +635,40 @@ pub async fn send_chat(
     let _ = on_event.send(StreamEvent::Done);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_base_only_matches_openrouter() {
+        assert!(is_default_base("https://openrouter.ai/api/v1"));
+        assert!(!is_default_base("http://localhost:11434/v1")); // local Ollama
+        assert!(!is_default_base("https://api.example.com/v1"));
+    }
+
+    #[test]
+    fn extract_usage_parses_fields() {
+        let j = serde_json::json!({
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "cost": 0.002
+            }
+        });
+        let u = extract_usage(&j);
+        assert_eq!(u.prompt_tokens, 10);
+        assert_eq!(u.completion_tokens, 5);
+        assert_eq!(u.total_tokens, 15);
+        assert!((u.cost - 0.002).abs() < 1e-9);
+    }
+
+    #[test]
+    fn extract_usage_defaults_to_zero_when_missing() {
+        let u = extract_usage(&serde_json::json!({}));
+        assert_eq!(u.prompt_tokens, 0);
+        assert_eq!(u.total_tokens, 0);
+        assert_eq!(u.cost, 0.0);
+    }
+}

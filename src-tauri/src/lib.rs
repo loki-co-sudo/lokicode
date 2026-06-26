@@ -50,7 +50,7 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
         });
     }
     // Directories first, then alphabetical.
-    entries.sort_by(|a, b| (!a.is_dir, a.name.to_lowercase()).cmp(&(!b.is_dir, b.name.to_lowercase())));
+    entries.sort_by_key(|e| (!e.is_dir, e.name.to_lowercase()));
     Ok(entries)
 }
 

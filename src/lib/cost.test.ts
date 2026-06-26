@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { approxTokens, estimateDeepReasoningCost } from "./cost";
+import {
+  approxTokens,
+  estimateDeepReasoningCost,
+  pipelineShape,
+  structuralCalls,
+} from "./cost";
 
 const calib = { outTokens: 700, toolMult: 2.5, samples: 1 };
 
@@ -56,5 +61,65 @@ describe("estimateDeepReasoningCost", () => {
       synthesis: { promptPrice: 0.00001, completionPrice: 0.00002 },
     });
     expect(r.usd).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("pipelineShape", () => {
+  it("simple run (depth 1, breadth 1, tools): no decomposition, no ensemble", () => {
+    const s = pipelineShape(1, 1, true);
+    expect(s).toEqual({
+      classify: 1,
+      brief: 1,
+      invest: 0,
+      suff: 0,
+      judge: 1,
+      refine: 1,
+      draftLoop: 1, // single draft is a tool loop
+      draftPlain: 0,
+      finalLoop: 1, // single final is a tool loop
+      finalPlain: 0,
+    });
+  });
+
+  it("depth>=3 turns draft/final into Mixture-of-Agents (plain), no loop draft/final", () => {
+    const s = pipelineShape(3, 1, true);
+    expect(s.draftLoop).toBe(0);
+    expect(s.finalLoop).toBe(0);
+    expect(s.draftPlain).toBe(3); // N proposers + 1 merge (N=2)
+    expect(s.finalPlain).toBe(3); // N candidates + 1 select
+    expect(s.judge).toBe(3);
+    expect(s.refine).toBe(3);
+  });
+
+  it("breadth>1 adds investigation + sufficiency and triggers ensemble", () => {
+    const s = pipelineShape(1, 3, true);
+    expect(s.invest).toBe(3);
+    expect(s.suff).toBe(1);
+    expect(s.draftLoop).toBe(0); // ensemble
+    expect(s.finalPlain).toBe(3);
+  });
+
+  it("no-tools run drops the classify (NEEDS_EXEC) call", () => {
+    expect(pipelineShape(1, 1, false).classify).toBe(0);
+    expect(pipelineShape(1, 1, true).classify).toBe(1);
+  });
+
+  it("clamps breadth to 1..5 and floors depth at 0", () => {
+    expect(pipelineShape(-5, 99, true).invest).toBe(5); // breadth capped at 5
+    expect(pipelineShape(-5, 1, true).judge).toBe(0); // depth floored at 0
+  });
+});
+
+describe("structuralCalls", () => {
+  it("loop = invest+refine+draftLoop+finalLoop, plain = the rest", () => {
+    // depth 1, breadth 1, tools: loop = 0+1+1+1 = 3; plain = 1+1+0+1+0+0 = 3
+    expect(structuralCalls(1, 1, true)).toEqual({ loop: 3, plain: 3 });
+  });
+
+  it("matches the per-phase shape exactly (single source of truth)", () => {
+    const s = pipelineShape(3, 3, true);
+    const c = structuralCalls(3, 3, true);
+    expect(c.loop).toBe(s.invest + s.refine + s.draftLoop + s.finalLoop);
+    expect(c.plain).toBe(s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain);
   });
 });

@@ -1,0 +1,50 @@
+name: CI
+
+# Build/test gate for every push to master and every PR. Nothing else guards the
+# build, so this is the safety net: TypeScript type-check + frontend tests, and
+# Rust clippy (warnings = errors) + Rust tests.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npx vitest run
+
+  rust:
+    # Windows is the app's target; running here avoids needing Linux WebView libs.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # tauri::generate_context! embeds ../dist at compile time, so the frontend
+      # must be built before the Rust crate will compile.
+      - name: Build frontend (produces dist/)
+        run: |
+          npm ci
+          npm run build
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Clippy (deny warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
