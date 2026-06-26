@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { chatOnceStream, type ApiMessage, type Usage } from "./openrouter";
-import { getMaxIterations, getCommandTimeout } from "./agentSettings";
+import { getMaxIterations, getCommandTimeout, getRestrictToWorkspace } from "./agentSettings";
 
 export type ToolStatus = "running" | "done" | "error" | "denied";
 
@@ -286,11 +286,60 @@ interface SearchMatch {
   text: string;
 }
 
+/** Normalize an absolute path for containment comparison: unify separators,
+ * resolve `.`/`..` segments, drop a trailing slash, lowercase (Windows is
+ * case-insensitive). Resolving `..` is essential so `<root>/../secret` can't
+ * slip past a naive prefix check. */
+function normAbs(p: string): string {
+  const out: string[] = [];
+  for (const seg of p.replace(/\\/g, "/").split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") out.pop();
+    else out.push(seg);
+  }
+  return out.join("/").toLowerCase();
+}
+
+/** Is `target` inside (or equal to) `root`? Used to confine agent file access to
+ * the workspace when the "restrict to workspace" setting is on. */
+function withinWorkspace(target: string, root: string): boolean {
+  const r = normAbs(root);
+  const t = normAbs(target);
+  return t === r || t.startsWith(r + "/");
+}
+
+/** Enforce the workspace-restriction setting on a tool call: returns a denial
+ * string when a path argument escapes the workspace, else null (allowed). */
+function workspaceGuard(
+  name: string,
+  args: Record<string, unknown>,
+  workspaceRoot?: string,
+): string | null {
+  if (!workspaceRoot || !getRestrictToWorkspace()) return null;
+  const candidate =
+    name === "read_file" || name === "write_file" || name === "list_dir"
+      ? args.path
+      : name === "grep_search"
+        ? args.path // optional; undefined → defaults to the workspace root (safe)
+        : name === "run_command"
+          ? args.cwd // optional; undefined → defaults to the workspace root (safe)
+          : undefined;
+  if (typeof candidate === "string" && candidate && !withinWorkspace(candidate, workspaceRoot)) {
+    return (
+      `拒否: 設定「ワークスペース外へのアクセスを制限」が有効です。` +
+      `ワークスペース(${workspaceRoot})の外のパスは操作できません: ${candidate}`
+    );
+  }
+  return null;
+}
+
 async function execTool(
   name: string,
   args: Record<string, unknown>,
   workspaceRoot?: string,
 ): Promise<string> {
+  const denied = workspaceGuard(name, args, workspaceRoot);
+  if (denied) return denied;
   switch (name) {
     case "read_file":
       return truncate(await invoke<string>("read_text_file", { path: String(args.path) }));

@@ -1045,6 +1045,22 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     }
   }
 
+  // Switching to "全自動" removes every approval gate, so confirm the risk once
+  // before enabling it. Other levels switch immediately.
+  async function selectApproval(v: ApprovalLevel) {
+    if (v === "auto" && approval !== "auto") {
+      const ok = await confirm(
+        "「全自動」は、ファイルの書き込み・コマンド実行・git 操作を含むすべてのツールを" +
+          "確認なしで実行します。信頼できないコードやリポジトリでは、隠れた指示" +
+          "（プロンプトインジェクション）によって意図しない破壊的コマンドや情報の外部送信が" +
+          "行われる恐れがあります。本当に有効にしますか？",
+        { title: "全自動承認を有効にしますか？", kind: "warning" },
+      );
+      if (!ok) return;
+    }
+    setApprovalLevel(v);
+  }
+
   function handleStop() {
     abortRef.current.aborted = true;
     // Abort any in-flight backend request for this run so Stop takes effect
@@ -1426,7 +1442,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               ).map(([v, label]) => (
                 <button
                   key={v}
-                  onClick={() => setApprovalLevel(v)}
+                  onClick={() => selectApproval(v)}
                   className={
                     "rounded px-1.5 py-0.5 text-[11px] " +
                     (approval === v

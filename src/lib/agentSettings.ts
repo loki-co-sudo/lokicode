@@ -3,6 +3,7 @@
 const ITER_KEY = "lokicode.maxIterations";
 const TIMEOUT_KEY = "lokicode.commandTimeout";
 const VERIFY_KEY = "lokicode.verifyCommand";
+const RESTRICT_KEY = "lokicode.restrictToWorkspace";
 
 /** Max times the agent re-runs the verify command and fixes failures. */
 export const MAX_VERIFY_ATTEMPTS = 2;
@@ -58,6 +59,23 @@ export function getVerifyCommand(): string {
 export function setVerifyCommand(s: string) {
   try {
     localStorage.setItem(VERIFY_KEY, s);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/** When on, the agent's file tools (read/write/list/grep) and run_command's cwd
+ * are confined to the open workspace folder — a guard against a prompt-injected
+ * agent reading secrets elsewhere (e.g. ~/.ssh) and sending them to the model.
+ * Default ON (secure by default); only applies when a workspace is open. */
+export function getRestrictToWorkspace(): boolean {
+  // Absent key → default true. Only "0" disables.
+  return localStorage.getItem(RESTRICT_KEY) !== "0";
+}
+
+export function setRestrictToWorkspace(on: boolean) {
+  try {
+    localStorage.setItem(RESTRICT_KEY, on ? "1" : "0");
   } catch {
     /* non-fatal */
   }

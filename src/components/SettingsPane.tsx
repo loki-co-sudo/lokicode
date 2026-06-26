@@ -12,9 +12,11 @@ import {
   getMaxIterations,
   getCommandTimeout,
   getVerifyCommand,
+  getRestrictToWorkspace,
   setMaxIterations,
   setCommandTimeout,
   setVerifyCommand,
+  setRestrictToWorkspace,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_COMMAND_TIMEOUT,
   MAX_ITERATIONS_RANGE,
@@ -69,6 +71,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
   const [maxIterations, setMaxIter] = useState(() => getMaxIterations());
   const [commandTimeout, setCmdTimeout] = useState(() => getCommandTimeout());
   const [verifyCommand, setVerifyCmd] = useState(() => getVerifyCommand());
+  const [restrictWorkspace, setRestrictWs] = useState(() => getRestrictToWorkspace());
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -76,6 +79,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
     setMaxIter(getMaxIterations());
     setCmdTimeout(getCommandTimeout());
     setVerifyCmd(getVerifyCommand());
+    setRestrictWs(getRestrictToWorkspace());
     getSettings().then((s) => {
       setStatus(s);
       setModel(s.model);
@@ -113,6 +117,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
     setMaxIterations(maxIterations);
     setCommandTimeout(commandTimeout);
     setVerifyCommand(verifyCommand.trim());
+    setRestrictToWorkspace(restrictWorkspace);
     onSaved();
     setSaved(true);
     setApiKey("");
@@ -278,6 +283,31 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
             placeholder="例: npm run build / npm test（空欄で無効）"
             className="w-full rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-neutral-100 outline-none focus:border-blue-500"
           />
+
+          <div className="mt-3 flex items-start justify-between gap-2">
+            <label className="flex items-center gap-2 text-[11px] text-neutral-300">
+              <input
+                type="checkbox"
+                checked={restrictWorkspace}
+                onChange={(e) => setRestrictWs(e.target.checked)}
+                className="h-3.5 w-3.5 accent-blue-500"
+              />
+              ワークスペース外へのアクセスを制限（推奨）
+            </label>
+            <Help
+              text={
+                <>
+                  ON（既定）にすると、AI の<b className="text-neutral-300">ファイル操作（読み取り・書き込み・一覧・grep）と run_command の作業ディレクトリ</b>が、開いているワークスペースフォルダの中だけに制限されます。
+                  <br />
+                  <b className="text-neutral-300">目的:</b> 悪意ある指示（プロンプトインジェクション）で AI が <code>~/.ssh</code> 等の機密ファイルを読み、モデル（外部）へ送るのを防ぎます。
+                  <br />
+                  <b className="text-neutral-300">OFF にすると:</b> AI はワークスペース外のファイルも読み書きできます（複数プロジェクト横断などに必要なとき）。
+                  <br />
+                  <b className="text-amber-300">注意:</b> run_command はシェルなので、コマンド自体が外部パスを参照することは完全には防げません（制限されるのは作業ディレクトリです）。ワークスペース未オープン時は制限されません。
+                </>
+              }
+            />
+          </div>
         </div>
 
         <div className="rounded-md border border-neutral-700 bg-[#1e1e1e] p-2">
