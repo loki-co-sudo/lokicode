@@ -1416,8 +1416,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             checked={deepReasoning}
             onChange={setDeepReasoning}
             accent="bg-indigo-500"
-            label="ディープシンク"
-            title="ドラフト→内省→合成を反復して回答の質を上げます（API 呼び出しが増え高コスト）。"
+            label="ディープシンク (beta)"
+            title="【実験的機能・beta】ドラフト→内省→合成を反復して回答の質を上げます（API 呼び出しが増え高コスト）。挙動・品質は今後も改良予定です。"
             disabled={autoRoute}
           />
           <Toggle

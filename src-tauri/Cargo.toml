@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.63.0"
+version = "1.0.0"
 description = "lokicode - VS Code-style editor with OpenRouter AI chat"
 authors = ["herok"]
 license = "MIT"
