@@ -175,7 +175,7 @@ export const TOOLS = [
     function: {
       name: "run_command",
       description:
-        "Run a shell command on the user's machine and return stdout, stderr and exit code. On Windows this runs via cmd.",
+        "Run a shell command on the user's machine and return stdout, stderr and exit code. On Windows this runs via PowerShell (pwsh preferred) in a hidden window. Commands must be NON-INTERACTIVE: they cannot prompt, open an editor, or page output — for git use --no-pager and pass messages inline (e.g. git commit -m). Chain related steps in one call with ';'.",
       parameters: {
         type: "object",
         properties: {
