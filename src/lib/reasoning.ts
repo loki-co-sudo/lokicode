@@ -486,11 +486,18 @@ export async function runRecurrentReasoning(
     // weak executor sees a finished assistant answer and stops immediately ("done"
     // with no tool calls). `toolCount` tracks whether it actually did any work.
     let toolCount = 0;
+    // Track the executor's own plan so we can tell whether it actually finished.
+    // The fast executor model tends to stop early (narrate "done" with no tool
+    // call) while planned steps are still pending — onIdle below refuses that stop.
+    let latestTodos: Todo[] = [];
     const execCb = {
       onAssistantText: (t: string) => cb.onFinal(t),
       onAssistantDelta: cb.onAssistantDelta,
       onAssistantDone: cb.onAssistantDone,
-      onPlan: cb.onPlan,
+      onPlan: (todos: Todo[]) => {
+        latestTodos = todos;
+        cb.onPlan?.(todos);
+      },
       onToolStart: (c: { name: string; args: Record<string, unknown> }) => {
         toolCount++;
         cb.onToolStart(c);
@@ -507,6 +514,22 @@ export async function runRecurrentReasoning(
       readOnly: false,
       cancelId: opts.runId,
       traceTag: "execute",
+      // Refuse a premature stop while the executor's own plan still has open steps:
+      // hand back the unfinished items so it continues in-context instead of quitting.
+      onIdle: (): string | null => {
+        const open = latestTodos.filter((t) => t.status !== "completed");
+        if (open.length === 0) return null; // plan complete (or no plan) → allow stop
+        console.log(
+          `[execute] stop requested but ${open.length} plan step(s) incomplete — continuing`,
+        );
+        return (
+          "計画にはまだ完了していないステップがあります:\n" +
+          open.map((t) => `- [${t.status}] ${t.content}`).join("\n") +
+          "\n\nテキストだけで終わらせず、いますぐツール（write_file / run_command / read_file 等）を" +
+          "使ってこれらを最後まで実行し、完了したステップは update_plan で completed に更新してください。" +
+          "本当にすべて完了している場合のみ、その旨を報告して終了してください。"
+        );
+      },
     };
     const planMsg = sys(`実行する計画（設計ブリーフ。これに沿って実際に作業すること）:\n\n${briefText}`);
     await runAgent([...base, ...briefMsgs, planMsg, EXECUTE], execCb, execOpts);

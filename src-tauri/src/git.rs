@@ -66,10 +66,26 @@ fn auth_args(app: &AppHandle) -> Vec<String> {
     }
 }
 
+/// Apply the Windows CREATE_NO_WINDOW flag so spawning `git` never flashes a
+/// console window. The Source Control panel polls `git status` frequently and the
+/// agent's git tools shell out here too, so without this a console window flickers
+/// on every call (alarming — looks like malware). Output is still captured via the
+/// normal stdout/stderr pipes. No-op on non-Windows platforms.
+fn hide_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 fn run_git(cwd: &str, args: &[&str]) -> Result<(String, String, i32), String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(cwd);
+    hide_window(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("git の実行に失敗しました（git は入っていますか？）: {e}"))?;
     Ok((
@@ -83,12 +99,14 @@ fn run_git(cwd: &str, args: &[&str]) -> Result<(String, String, i32), String> {
 fn run_git_stdin(cwd: &str, args: &[&str], input: &str) -> Result<(String, String, i32), String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_window(&mut cmd);
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("git の実行に失敗しました: {e}"))?;
     {

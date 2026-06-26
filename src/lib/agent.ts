@@ -386,7 +386,21 @@ export interface AgentOptions {
   cancelId?: number;
   /** Label for the `[tag]` console timing logs (e.g. "execute" for deep-think). */
   traceTag?: string;
+  /**
+   * Called when the model returns a final answer with no tool calls (i.e. it wants
+   * to stop). Return a non-empty string to REJECT the stop: that string is pushed
+   * as a user message and the loop continues with full conversation context intact.
+   * Return null/empty to accept the stop. Used by the deep-think executor to refuse
+   * a premature stop while planned steps are still incomplete. Bounded internally by
+   * MAX_IDLE_NUDGES so a model that genuinely cannot finish isn't pestered forever.
+   */
+  onIdle?: () => string | null;
 }
+
+/** Max consecutive times onIdle may reject a stop before we let the agent stop
+ * anyway. Reset to 0 whenever the agent makes real progress (uses a tool), so this
+ * only bounds *consecutive* no-progress nudges, not total continuations. */
+const MAX_IDLE_NUDGES = 3;
 
 /**
  * Run the agent loop starting from `messages` (system + history + latest user).
@@ -409,6 +423,7 @@ export async function runAgent(
   // iteration logs its LLM round-trip time, tool calls, and per-tool durations.
   const trace = opts.traceTag ?? "agent";
   const runStart = performance.now();
+  let idleNudges = 0;
 
   for (let i = 0; i < maxIterations; i++) {
     if (opts.signal?.aborted) return finalText;
@@ -444,11 +459,25 @@ export async function runAgent(
 
     const calls = assistant.tool_calls ?? [];
     if (calls.length === 0) {
+      // The model wants to stop. Before accepting, let onIdle veto a premature
+      // stop (e.g. deep-think executor with unfinished plan steps). Bounded so a
+      // model that truly can't proceed isn't nudged forever.
+      const nudge = idleNudges < MAX_IDLE_NUDGES ? opts.onIdle?.() : null;
+      if (nudge) {
+        idleNudges++;
+        console.log(
+          `[${trace}] idle but not done — continuing (nudge ${idleNudges}/${MAX_IDLE_NUDGES})`,
+        );
+        conv.push({ role: "user", content: nudge });
+        continue;
+      }
       console.log(
         `[${trace}] done · ${((performance.now() - runStart) / 1000).toFixed(1)}s · ${i + 1} iteration(s)`,
       );
       return finalText; // final answer reached
     }
+    // Real progress: reset the no-progress nudge budget.
+    idleNudges = 0;
 
     for (const call of calls) {
       if (opts.signal?.aborted) return finalText;
