@@ -31,6 +31,7 @@ import {
   type EffortLevel,
 } from "../lib/agentSettings";
 import { classifyTask } from "../lib/router";
+import { LOOP_MAX_ATTEMPTS, errorSignature, evidenceTail } from "../lib/loop";
 import {
   runAgent,
   commandRisk,
@@ -96,6 +97,7 @@ function buildSystemPrompt(
   workspaceRoot: string | null,
   rules: string,
   effort: EffortLevel,
+  loopMode: boolean,
 ): ApiMessage {
   return {
     role: "system",
@@ -122,7 +124,14 @@ Efficiency (work in the fewest round-trips):
 - Reuse what you already have: never re-read a file or re-run an inspection whose result is already in this conversation. Only verify when a change could plausibly have failed.
 - Chain related shell steps in a single run_command with ';' instead of many calls. Keep every command non-interactive — never invoke a pager or an editor (they hang until the timeout).
 - Git: inspect in one call (e.g. \`git --no-pager status; git --no-pager diff\`); stage and commit together (\`git add -A; git commit -m "..."\`); always use --no-pager for log/diff and pass the message via -m or -F. Never run history-rewriting or destructive git (\`reset --hard\`, \`push --force\`, \`clean -f\`, \`checkout -- .\`) unless the user explicitly asks.
-${EFFORT_AGENT_GUIDANCE[effort]}
+${EFFORT_AGENT_GUIDANCE[effort]}${
+      loopMode
+        ? `
+Loop mode (a verify command will run automatically after your edits; failures come back to you to fix):
+- NEVER delete, weaken, or skip tests/assertions to make checks pass. Fix the code, not the evaluation criteria.
+- Do not claim the task is complete on the basis of your own judgement alone — completion is decided by the checks passing (the harness attaches the passing output as evidence).`
+        : ""
+    }
 ${workspaceRoot ? `The open workspace folder is: ${workspaceRoot} (use it as the base for relative work and as the cwd for run_command).` : ""}
 ${filePath ? `The user's active file is: ${filePath}` : `The active editor tab is unsaved (named "${fileName}").`}${
       rules.trim()
@@ -433,6 +442,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   );
   const approval = (approvalLevel as ApprovalLevel) || "standard";
   const [selfCheck, setSelfCheck] = usePersistentBool("lokicode.selfCheck", true);
+  // Loop mode: change→verify→fix until the verify command passes (max 5), with
+  // stuck detection. Opt-in because each failed round costs a full agent run.
+  const [loopMode, setLoopMode] = usePersistentBool("lokicode.loopMode", false);
   // Effort preset (speed/balanced/quality): one knob for the cost/speed vs
   // accuracy trade-off. Persisted via agentSettings so reasoning.ts sees it too.
   const [effortLevel, setEffortLevel] = useState<EffortLevel>(() => getEffort());
@@ -843,7 +855,14 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     runIdRef.current = runId;
 
     const base: ApiMessage[] = [
-      buildSystemPrompt(currentFileName, currentFilePath, workspaceRoot, rulesText, effortLevel),
+      buildSystemPrompt(
+        currentFileName,
+        currentFilePath,
+        workspaceRoot,
+        rulesText,
+        effortLevel,
+        loopMode && agentMode,
+      ),
     ];
     if (includeFile && currentCode.trim()) {
       base.push({
@@ -976,10 +995,22 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
 
         // Execution-grounded self-correction (Reflexion): run the user's verify
         // command; on failure, feed the output back and let the agent fix it,
-        // re-running until it passes or we hit the attempt cap.
+        // re-running until it passes or we hit the attempt cap. Loop mode raises
+        // the cap to LOOP_MAX_ATTEMPTS, quotes the passing output as evidence,
+        // and stops immediately when the SAME error repeats twice (stuck
+        // detection → escalate to a fresh context). See specs/loop-mode.md.
         const verifyCmd = getVerifyCommand();
+        if (loopMode && !verifyCmd && editedRef.current && !signal.aborted) {
+          appendItem({
+            kind: "assistant",
+            content:
+              "ℹ️ ループモードが ON ですが、設定の「検証コマンド」が未設定のため検証ループは実行されません。設定（⚙️）で `npm test` などを指定してください。",
+          });
+        }
         if (verifyCmd && editedRef.current && !signal.aborted) {
-          for (let attempt = 1; attempt <= MAX_VERIFY_ATTEMPTS && !signal.aborted; attempt++) {
+          const maxAttempts = loopMode ? LOOP_MAX_ATTEMPTS : MAX_VERIFY_ATTEMPTS;
+          let prevSig: string | null = null;
+          for (let attempt = 1; attempt <= maxAttempts && !signal.aborted; attempt++) {
             appendItem({ kind: "tool", name: "run_command", args: { command: verifyCmd }, status: "running" });
             let result: { stdout: string; stderr: string; code: number };
             try {
@@ -995,14 +1026,33 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             const log = `exit code: ${result.code}\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`;
             if (result.code === 0) {
               updateLastTool("done", log);
-              appendItem({ kind: "assistant", content: `✅ 検証コマンド \`${verifyCmd}\` が成功しました。` });
+              appendItem({
+                kind: "assistant",
+                content:
+                  `✅ 検証コマンド \`${verifyCmd}\` が成功しました（試行 ${attempt}/${maxAttempts}）。\n\n` +
+                  `通過の証拠（出力の末尾）:\n\`\`\`\n${evidenceTail(result.stdout + "\n" + result.stderr)}\n\`\`\``,
+              });
               break;
             }
             updateLastTool("error", log);
-            if (attempt >= MAX_VERIFY_ATTEMPTS) {
+            // Stuck detection: the same normalized failure twice in a row means
+            // the model is looping on one idea — stop and hand off instead of
+            // burning more attempts on it.
+            const sig = errorSignature(log);
+            if (prevSig !== null && sig === prevSig) {
               appendItem({
                 kind: "assistant",
-                content: `⚠️ 検証コマンドが ${MAX_VERIFY_ATTEMPTS} 回試しても失敗しました。手動で確認してください。`,
+                content:
+                  `🛑 同じエラーが2回連続で発生したため、ループを停止しました（思考が固着している可能性）。\n` +
+                  `**新しいスレッド（別コンテキスト）で修復を依頼する**か、より強いモデルに切り替えて再試行してください。エラーログは上のカードで確認できます。`,
+              });
+              break;
+            }
+            prevSig = sig;
+            if (attempt >= maxAttempts) {
+              appendItem({
+                kind: "assistant",
+                content: `⚠️ 検証コマンドが ${maxAttempts} 回試しても失敗しました。残っている問題は上のエラーログのとおりです。手動で確認してください。`,
               });
               break;
             }
@@ -1013,7 +1063,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               { role: "assistant", content: finalAnswer },
               {
                 role: "user",
-                content: `検証コマンド \`${verifyCmd}\` が失敗しました。出力:\n\n${clipped}\n\nこのエラーの原因を特定し、ファイルを修正して直してください。`,
+                content:
+                  `検証コマンド \`${verifyCmd}\` が失敗しました。出力:\n\n${clipped}\n\n` +
+                  `このエラーの原因を特定し、ファイルを修正して直してください。` +
+                  `テストやアサーションを削除・弱体化・スキップして通そうとしないこと（直すのはコード本体であり、評価基準ではありません）。`,
               },
             ];
             finalAnswer = await runAgent(fixMsgs, agentCb, agentOpts);
@@ -1510,6 +1563,15 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               accent="bg-sky-500"
               label="セルフチェック"
               title="回答前に、目的・制約に照らして自己点検し、必要なら修正します（1回の追加 API 呼び出し）。"
+            />
+          )}
+          {agentMode && !deepReasoning && (
+            <Toggle
+              checked={loopMode}
+              onChange={setLoopMode}
+              accent="bg-rose-500"
+              label="ループ"
+              title="変更→検証→修正を、設定の「検証コマンド」（例 npm test）が通るまで自動で繰り返します（最大5回）。成功時は通過した出力を証拠として表示。同じエラーが2回連続なら手詰まりとして即停止し、別コンテキストでの修復を促します。⚠️ 失敗のたびに Agent 実行1周ぶんの API コストがかかります。検証コマンド未設定時は動作しません。"
             />
           )}
           <Toggle
