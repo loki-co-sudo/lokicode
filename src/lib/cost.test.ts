@@ -108,6 +108,28 @@ describe("pipelineShape", () => {
     expect(pipelineShape(-5, 99, true).invest).toBe(5); // breadth capped at 5
     expect(pipelineShape(-5, 1, true).judge).toBe(0); // depth floored at 0
   });
+
+  it("effort width 1 disables the ensemble even on deep runs", () => {
+    const s = pipelineShape(3, 1, true, 1);
+    expect(s.draftLoop).toBe(1);
+    expect(s.draftPlain).toBe(0);
+    expect(s.finalLoop).toBe(1);
+    expect(s.finalPlain).toBe(0);
+    expect(s.invest).toBe(0); // no ensemble → no grounding investigation needed
+  });
+
+  it("effort width 3 widens the MoA draft/final to 4 calls each", () => {
+    const s = pipelineShape(3, 1, true, 3);
+    expect(s.draftPlain).toBe(4); // 3 proposers + 1 merge
+    expect(s.finalPlain).toBe(4); // 3 candidates + 1 select
+  });
+
+  it("adds one grounding investigation on ensemble runs with breadth 1 + tools", () => {
+    expect(pipelineShape(3, 1, true).invest).toBe(1); // ensemble, no breadth → ground once
+    expect(pipelineShape(3, 1, false).invest).toBe(0); // no tools → cannot investigate
+    expect(pipelineShape(1, 1, true).invest).toBe(0); // no ensemble → tool-using draft grounds itself
+    expect(pipelineShape(3, 3, true).invest).toBe(3); // breadth already investigates
+  });
 });
 
 describe("structuralCalls", () => {

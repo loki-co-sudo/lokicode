@@ -24,6 +24,11 @@ import {
   getVerifyCommand,
   getCommandTimeout,
   MAX_VERIFY_ATTEMPTS,
+  EFFORT_AGENT_GUIDANCE,
+  EFFORT_PARAMS,
+  getEffort,
+  setEffort,
+  type EffortLevel,
 } from "../lib/agentSettings";
 import { classifyTask } from "../lib/router";
 import {
@@ -90,6 +95,7 @@ function buildSystemPrompt(
   filePath: string | null,
   workspaceRoot: string | null,
   rules: string,
+  effort: EffortLevel,
 ): ApiMessage {
   return {
     role: "system",
@@ -97,7 +103,9 @@ function buildSystemPrompt(
 You can use the provided tools to read/list/write files and run shell commands to actually accomplish the user's request — not just describe it.
 run_command runs under PowerShell: prefer PowerShell syntax (e.g. Select-String, Get-Content, Get-ChildItem), use ; or separate calls instead of relying on cmd-only builtins, and prefer the read-only tools (read_file / grep_search / list_dir) over shelling out when they suffice.
 Operating principles:
+- You are an agent: keep going until the user's request is fully resolved before ending your turn. When the task asks you to DO something, do it with tools — never stop at describing what you would do.
 - Work from the GOAL and any CONSTRAINTS, not a fixed recipe: choose your own means, but never take irreversible actions beyond what was asked, and respect every stated constraint.
+- Gather context only until you can act: once you can name the exact file(s) and change to make, STOP searching and make the change. Over-investigation is the main source of wasted cost and latency.
 - For non-trivial tasks, first state a brief plan with update_plan (current understanding, unknowns, steps) and keep exactly one step in_progress; update it as you go.
 - When asked to BUILD or ADD a feature whose key design decisions are unspecified (e.g. "add a login feature" without the auth method, the target surface, or where data is stored), you MUST call ask_user to confirm those decisions BEFORE planning or writing any files. Do not silently assume them. Ask one concise question (you may offer 2-3 options). Only skip this for choices trivial enough that any reasonable default is fine.
 - On errors or missing info, do not freeze or invent facts: gather evidence with tools, and if the same approach fails twice, switch strategy or ask_user rather than repeating it.
@@ -114,6 +122,7 @@ Efficiency (work in the fewest round-trips):
 - Reuse what you already have: never re-read a file or re-run an inspection whose result is already in this conversation. Only verify when a change could plausibly have failed.
 - Chain related shell steps in a single run_command with ';' instead of many calls. Keep every command non-interactive — never invoke a pager or an editor (they hang until the timeout).
 - Git: inspect in one call (e.g. \`git --no-pager status; git --no-pager diff\`); stage and commit together (\`git add -A; git commit -m "..."\`); always use --no-pager for log/diff and pass the message via -m or -F. Never run history-rewriting or destructive git (\`reset --hard\`, \`push --force\`, \`clean -f\`, \`checkout -- .\`) unless the user explicitly asks.
+${EFFORT_AGENT_GUIDANCE[effort]}
 ${workspaceRoot ? `The open workspace folder is: ${workspaceRoot} (use it as the base for relative work and as the cwd for run_command).` : ""}
 ${filePath ? `The user's active file is: ${filePath}` : `The active editor tab is unsaved (named "${fileName}").`}${
       rules.trim()
@@ -424,6 +433,13 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   );
   const approval = (approvalLevel as ApprovalLevel) || "standard";
   const [selfCheck, setSelfCheck] = usePersistentBool("lokicode.selfCheck", true);
+  // Effort preset (speed/balanced/quality): one knob for the cost/speed vs
+  // accuracy trade-off. Persisted via agentSettings so reasoning.ts sees it too.
+  const [effortLevel, setEffortLevel] = useState<EffortLevel>(() => getEffort());
+  const selectEffort = (l: EffortLevel) => {
+    setEffort(l);
+    setEffortLevel(l);
+  };
   const [deepReasoning, setDeepReasoning] = usePersistentBool("lokicode.deepReasoning", false);
   const [ensemble, setEnsemble] = usePersistentBool("lokicode.ensemble", true);
   const [autoRoute, setAutoRoute] = usePersistentBool("lokicode.autoRoute", false);
@@ -559,8 +575,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       thinking: priceOf(effThinking || model),
       synthesis: priceOf(synthesisModel || model),
       calib,
+      ensembleSamples: EFFORT_PARAMS[effortLevel].ensembleSamples,
     });
-  }, [models, promptTokens, depth, samples, agentMode, thinkingModel, synthesisModel, model, calib]);
+  }, [models, promptTokens, depth, samples, agentMode, thinkingModel, synthesisModel, model, calib, effortLevel]);
 
   const mentionSuggestions = useMemo(() => {
     if (mentionQuery === null) return [];
@@ -826,7 +843,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     runIdRef.current = runId;
 
     const base: ApiMessage[] = [
-      buildSystemPrompt(currentFileName, currentFilePath, workspaceRoot, rulesText),
+      buildSystemPrompt(currentFileName, currentFilePath, workspaceRoot, rulesText, effortLevel),
     ];
     if (includeFile && currentCode.trim()) {
       base.push({
@@ -1031,7 +1048,12 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       // structural plain completions. (An execute fast-path run has a different
       // shape, so this stays an approximation that the EWMA smooths.)
       if (useDeep && useAgent) {
-        const { loop, plain } = structuralCalls(effDepth, effSamples, true);
+        const { loop, plain } = structuralCalls(
+          effDepth,
+          effSamples,
+          true,
+          EFFORT_PARAMS[effortLevel].ensembleSamples,
+        );
         const actualLoop = Math.max(1, callCountRef.current - plain);
         recordToolRun(actualLoop, loop);
       }
@@ -1455,6 +1477,32 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               ))}
             </div>
           )}
+          <div
+            className="flex items-center gap-1"
+            title="推論エフォート（コスト・速度と精度のバランスを一括調整）：速度＝検証少なめ・アンサンブル無効で最速/最安 / バランス＝既定 / 品質＝検証の合格基準を上げ、アンサンブル幅3・裏取り多めで最高精度（遅い・高コスト）。深さ・広さスライダーはこの上での微調整"
+          >
+            <span className="text-[11px] text-neutral-400">エフォート</span>
+            {(
+              [
+                ["speed", "速度"],
+                ["balanced", "バランス"],
+                ["quality", "品質"],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => selectEffort(v)}
+                className={
+                  "rounded px-1.5 py-0.5 text-[11px] " +
+                  (effortLevel === v
+                    ? "bg-violet-600 text-white"
+                    : "bg-neutral-700 text-neutral-300 hover:bg-neutral-600")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {agentMode && !deepReasoning && (
             <Toggle
               checked={selfCheck}
@@ -1477,7 +1525,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
                 onChange={setEnsemble}
                 accent="bg-indigo-500"
                 label="アンサンブル"
-                title="ON: 下書き・最終を複数生成して統合/選抜し精度を上げます（やや遅い・高コスト）。OFF: 単発で生成して高速・低コスト。速度優先なら OFF。"
+                title="ON: 下書き・最終を複数生成して統合/選抜し精度を上げます（やや遅い・高コスト）。OFF: 単発で生成して高速・低コスト。幅はエフォートに連動（速度=無効 / バランス=2 / 品質=3）。"
+                disabled={effortLevel === "speed"}
               />
               <label className="flex items-center gap-1.5" title="検証フェーズ（敵対的レビュー→改善）の反復回数。多いほど高品質・高コスト。速度優先なら小さく">
                 検証の深さ

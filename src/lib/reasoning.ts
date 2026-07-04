@@ -12,6 +12,7 @@
 
 import { complete, type ApiMessage, type Usage } from "./openrouter";
 import { runAgent, type ToolStatus, type Todo, type ApprovalLevel } from "./agent";
+import { getEffortParams } from "./agentSettings";
 
 export interface ReasoningCallbacks {
   /** Emitted for the draft and each reflection (thinking phases). */
@@ -57,16 +58,11 @@ export const MAX_DEPTH = 16;
 export const MAX_SAMPLES = 5;
 
 const MAX_EVIDENCE_CHARS = 9000;
-/** Verifier pass mark: stop refining once the judge scores at/above this. */
+/** Fallback verifier pass mark when no effort preset applies (parse fallback). */
 const PASS_SCORE = 85;
-/** Below this the refine escalates to the strong model. */
-const ESCALATE_BELOW = 70;
-/** Max sufficiency→gap-fill rounds before drafting (recursive deepening cap). */
-const MAX_SUFFICIENCY_ROUNDS = 2;
-/** Ensemble width (Mixture-of-Agents): parallel proposer drafts / final
- * candidates. Kept small (2) so latency stays ~flat — the samples run in
- * parallel — while diversity cancels uncorrelated errors. */
-const ENSEMBLE_SAMPLES = 2;
+// The verifier pass mark, escalation threshold, ensemble width and sufficiency
+// rounds are user-tunable via the effort preset (speed/balanced/quality) — see
+// lib/agentSettings.ts EFFORT_PARAMS and specs/effort-presets.md.
 
 function clampDepth(d: number): number {
   return Math.max(1, Math.min(MAX_DEPTH, Math.floor(d)));
@@ -353,9 +349,14 @@ export async function runRecurrentReasoning(
   const thinkingLabel = thinking || "(default)";
   const synthLabel = synthesis || thinkingLabel;
   const aborted = () => opts.signal?.aborted === true;
+  // Effort preset (speed/balanced/quality): the user's one-knob cost/speed vs
+  // accuracy dial. Read once per run so a mid-run settings change can't skew it.
+  const effort = getEffortParams();
   // Spend the extra ensemble passes only when the task is non-trivial (the user
-  // asked for breadth or depth); simple runs stay single-pass and fast.
-  let ensemble = (opts.ensemble ?? true) && (breadth > 1 || depth >= 3);
+  // asked for breadth or depth) AND the effort preset allows a width > 1.
+  let ensemble =
+    (opts.ensemble ?? true) && effort.ensembleSamples > 1 && (breadth > 1 || depth >= 3);
+  const ensembleSamples = effort.ensembleSamples;
 
   // ── Timing instrumentation (visible in the F12 console as `[deepthink]`) ─────
   // Each LLM round-trip is timed and tagged with its phase so the bottleneck is
@@ -572,7 +573,7 @@ export async function runRecurrentReasoning(
       // ── Phase B2 — Sufficiency gate (recursive): re-check after filling gaps so
       // newly-revealed gaps can also be covered, up to a bounded number of rounds. ─
       phaseTag = "sufficiency";
-      for (let round = 1; round <= MAX_SUFFICIENCY_ROUNDS; round++) {
+      for (let round = 1; round <= effort.sufficiencyRounds; round++) {
         const suffText = await think(
           [...base, ...briefMsgs, sys(`収集された調査結果:\n\n${joinEvidence(findings)}`), SUFFICIENCY],
           thinking,
@@ -581,11 +582,11 @@ export async function runRecurrentReasoning(
         if (aborted()) return;
         const { sufficient, gaps } = parseSufficiency(suffText);
         if (sufficient || gaps.length === 0) {
-          cb.onThought(`十分性チェック ${round}/${MAX_SUFFICIENCY_ROUNDS}`, thinkingLabel, "証拠は十分と判断");
+          cb.onThought(`十分性チェック ${round}/${effort.sufficiencyRounds}`, thinkingLabel, "証拠は十分と判断");
           break;
         }
         cb.onThought(
-          `十分性チェック ${round}/${MAX_SUFFICIENCY_ROUNDS}`,
+          `十分性チェック ${round}/${effort.sufficiencyRounds}`,
           thinkingLabel,
           "不足あり、追加調査します:\n" + gaps.map((g) => `- ${g}`).join("\n"),
         );
@@ -595,6 +596,21 @@ export async function runRecurrentReasoning(
         }
       }
       evidence = joinEvidence(findings);
+    }
+
+    // ── Phase B3 — Minimum grounding: with ensemble on, the drafts are plain
+    // (tool-less) parallel completions, so an evidence-less run would draft
+    // blind — a hallucination-prone path (e.g. depth≥3 with breadth=1). One
+    // read-only investigation of the GOAL grounds them at the cost of a single
+    // extra loop call. See specs/effort-presets.md §4.
+    if (!evidence && ensemble && opts.useTools) {
+      phaseTag = "investigate";
+      const q =
+        brief.goal ||
+        "ユーザーの依頼に正確に答えるために必要な事実（該当ファイル・実装の実態）を実ファイルで確認する";
+      const grounding = await investigate(q, "接地調査");
+      if (aborted()) return;
+      evidence = joinEvidence([grounding]);
     }
 
     // ── Phase C — Draft against the brief, grounded in the evidence ─────────────
@@ -612,13 +628,13 @@ export async function runRecurrentReasoning(
     if (ensemble) {
       // Mixture-of-Agents: several independent drafts (parallel, plain) → merge.
       const proposals = await Promise.all(
-        Array.from({ length: ENSEMBLE_SAMPLES }, () =>
+        Array.from({ length: ensembleSamples }, () =>
           think([...base, ...ctx, draftInstr], thinking, { tools: false }),
         ),
       );
       if (aborted()) return;
       proposals.forEach((p, i) =>
-        cb.onThought(`ドラフト案 ${i + 1}/${ENSEMBLE_SAMPLES}`, thinkingLabel, p),
+        cb.onThought(`ドラフト案 ${i + 1}/${ensembleSamples}`, thinkingLabel, p),
       );
       const merged = [
         ...base,
@@ -658,12 +674,12 @@ export async function runRecurrentReasoning(
         synthLabel,
         defects.length ? defects.map((d) => `- ${d}`).join("\n") : "重大な指摘なし",
       );
-      if (score >= PASS_SCORE || defects.length === 0) break;
+      if (score >= effort.passScore || defects.length === 0) break;
       if (aborted()) return;
 
       // Escalate the fix to the strong model whenever the score is low (any round),
       // so even depth=1 / early low scores aren't left to the weak model.
-      const escalate = score < ESCALATE_BELOW;
+      const escalate = score < effort.escalateBelow;
       const refineModel = escalate ? synthesis : thinking;
       draft = await think(
         [...base, ...ctx, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
@@ -684,7 +700,7 @@ export async function runRecurrentReasoning(
     phaseTag = "final";
     if (ensemble) {
       const candidates = await Promise.all(
-        Array.from({ length: ENSEMBLE_SAMPLES }, () =>
+        Array.from({ length: ensembleSamples }, () =>
           think([...base, ...ctx, { role: "assistant", content: draft }, FINAL(false)], synthesis, {
             tools: false,
           }),
@@ -692,7 +708,7 @@ export async function runRecurrentReasoning(
       );
       if (aborted()) return;
       candidates.forEach((c, i) =>
-        cb.onThought(`最終候補 ${i + 1}/${ENSEMBLE_SAMPLES}`, synthLabel, c),
+        cb.onThought(`最終候補 ${i + 1}/${ensembleSamples}`, synthLabel, c),
       );
       final = await think(
         [

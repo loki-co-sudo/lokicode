@@ -4,6 +4,7 @@ const ITER_KEY = "lokicode.maxIterations";
 const TIMEOUT_KEY = "lokicode.commandTimeout";
 const VERIFY_KEY = "lokicode.verifyCommand";
 const RESTRICT_KEY = "lokicode.restrictToWorkspace";
+const EFFORT_KEY = "lokicode.effort";
 
 /** Max times the agent re-runs the verify command and fixes failures. */
 export const MAX_VERIFY_ATTEMPTS = 2;
@@ -63,6 +64,71 @@ export function setVerifyCommand(s: string) {
     /* non-fatal */
   }
 }
+
+// ── Reasoning effort (cost/speed vs accuracy) ────────────────────────────────
+// One coarse user-facing preset that maps to the pipeline's tuning knobs, per
+// test-time-compute scaling findings (verifier-guided halting threshold, MoA /
+// best-of-N width, sufficiency-gate rounds). See specs/effort-presets.md.
+
+export type EffortLevel = "speed" | "balanced" | "quality";
+
+export interface EffortParams {
+  /** Verifier pass mark: stop refining once the judge scores at/above this. */
+  passScore: number;
+  /** Below this the refine escalates to the strong model. */
+  escalateBelow: number;
+  /** Mixture-of-Agents / best-of-N width (1 = ensemble disabled). */
+  ensembleSamples: number;
+  /** Max sufficiency→gap-fill rounds before drafting. */
+  sufficiencyRounds: number;
+}
+
+/** Width/threshold steps follow the diminishing-returns curve of parallel
+ * sampling (the 1→2 gain is the largest; 3+ tapers off). */
+export const EFFORT_PARAMS: Record<EffortLevel, EffortParams> = {
+  speed: { passScore: 78, escalateBelow: 60, ensembleSamples: 1, sufficiencyRounds: 1 },
+  balanced: { passScore: 85, escalateBelow: 70, ensembleSamples: 2, sufficiencyRounds: 2 },
+  quality: { passScore: 92, escalateBelow: 78, ensembleSamples: 3, sufficiencyRounds: 3 },
+};
+
+export const DEFAULT_EFFORT: EffortLevel = "balanced";
+
+export function getEffort(): EffortLevel {
+  try {
+    const v = localStorage.getItem(EFFORT_KEY);
+    if (v === "speed" || v === "balanced" || v === "quality") return v;
+  } catch {
+    /* no storage (tests) → default */
+  }
+  return DEFAULT_EFFORT;
+}
+
+export function setEffort(level: EffortLevel) {
+  try {
+    localStorage.setItem(EFFORT_KEY, level);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+export function getEffortParams(): EffortParams {
+  return EFFORT_PARAMS[getEffort()];
+}
+
+/** Per-effort operating instructions appended to the agent system prompt: how
+ * much optional verification / context gathering to spend. */
+export const EFFORT_AGENT_GUIDANCE: Record<EffortLevel, string> = {
+  speed:
+    "- Effort level: SPEED. Finish in the fewest steps: skip optional verification reads, " +
+    "do not re-check work that is unlikely to have failed, and keep the final answer to the essentials.",
+  balanced:
+    "- Effort level: BALANCED. Verify a change only when it could plausibly have failed; " +
+    "keep answers concise but complete.",
+  quality:
+    "- Effort level: QUALITY. After each substantive change, verify it (re-read the changed " +
+    "region; run the build/tests when cheap). Before finishing, check the result against each " +
+    "stated requirement one by one and fix any miss.",
+};
 
 /** When on, the agent's file tools (read/write/list/grep) and run_command's cwd
  * are confined to the open workspace folder — a guard against a prompt-injected
