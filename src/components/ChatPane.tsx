@@ -32,6 +32,7 @@ import {
 } from "../lib/agentSettings";
 import { classifyTask } from "../lib/router";
 import { LOOP_MAX_ATTEMPTS, errorSignature, evidenceTail } from "../lib/loop";
+import { assessDeepThinkReadiness } from "../lib/modelGate";
 import {
   runAgent,
   commandRisk,
@@ -504,19 +505,12 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const { models } = useModels();
   // Default thinking model when the user hasn't picked one (cost-recommended free router).
   const effThinking = thinkingModel || DEFAULT_THINKING_MODEL;
-  // Deep reasoning's safety net (the verifier + final) runs on the synthesis
-  // model. If THAT is weak/variable/non-tool, the net has holes — warn.
-  const synthWeakReason = useMemo(() => {
-    const id = synthesisModel || model;
-    if (!id) return null;
-    if (["openrouter/free", "openrouter/auto", "openrouter/fusion", "openrouter/pareto-code"].includes(id))
-      return "変動/ルーター系";
-    const m = models.find((x) => x.id === id);
-    if (!m) return null; // unknown to the list — can't judge
-    if (m.promptPrice < 0 || m.completionPrice < 0) return "変動価格";
-    if (!m.supportsTools) return "ツール非対応";
-    return null;
-  }, [synthesisModel, model, models]);
+  // Deep-think model requirements gate: are the selected models smart enough
+  // for the deep pipeline to beat single-agent mode? (specs/model-gate.md)
+  const modelGate = useMemo(
+    () => assessDeepThinkReadiness(effThinking, synthesisModel || model, models),
+    [effThinking, synthesisModel, model, models],
+  );
   // Calibration learned from real usage; refreshed after each run.
   const [calib, setCalib] = useState(() => loadCalib());
 
@@ -1348,15 +1342,33 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         </div>
       )}
 
-      {hasKey && deepReasoning && synthWeakReason && (
-        <div className="m-3 rounded-md border border-amber-700/50 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
-          ⚠️ ディープシンクの検証器（安全網）は<b>合成モデル</b>で動きます。現在の合成モデル
-          <span className="font-mono text-amber-200"> {synthesisModel || model} </span>
-          は<b>{synthWeakReason}</b>のため、誤りの見逃しや品質低下の恐れがあります。
-          <button onClick={onOpenSettings} className="ml-1 underline hover:text-amber-200">
-            設定で有能なモデルに
+      {hasKey && (deepReasoning || autoRoute) && modelGate.level !== "ok" && (
+        <div
+          className={
+            "m-3 rounded-md border px-3 py-2 text-xs " +
+            (modelGate.level === "critical"
+              ? "border-red-700/60 bg-red-950/40 text-red-300"
+              : "border-amber-700/50 bg-amber-950/40 text-amber-300")
+          }
+        >
+          <div className="mb-1 font-medium">
+            {modelGate.level === "critical" ? "🛑" : "⚠️"} 現在のモデル構成では、ディープシンクが
+            Agent 単独より精度が出ない可能性があります。
+          </div>
+          <ul className="ml-4 list-disc space-y-0.5">
+            {modelGate.issues.map((iss, i) => (
+              <li key={i}>
+                <b>{iss.target === "synthesis" ? "合成" : "思考"}モデル</b>
+                <span className="font-mono">
+                  （{iss.target === "synthesis" ? synthesisModel || model : effThinking}）
+                </span>
+                : {iss.reason}。{iss.advice}
+              </li>
+            ))}
+          </ul>
+          <button onClick={onOpenSettings} className="mt-1 underline hover:opacity-80">
+            設定を開く
           </button>
-          することを推奨します（思考モデルは安価でも、合成モデルは有能なものを）。
         </div>
       )}
 
