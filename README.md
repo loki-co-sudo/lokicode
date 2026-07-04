@@ -282,6 +282,7 @@ src-tauri/
     openrouter.rs         # キー解決・complete / chat_once / streaming・モデル一覧・設定
   capabilities/default.json
 specs/                    # 設計仕様（architecture.md / deep-reasoning-v2.md / effort-presets.md）
+.lokicode/rules.md        # この repo を lokicode で開いたとき AI に自動注入される開発ルール
 app-icon.svg / app-icon.png  # アイコン元データ（`npm run tauri icon` で再生成可能）
 ```
 
