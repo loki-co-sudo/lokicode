@@ -112,15 +112,19 @@ const SUFFICIENCY = usr(
     "(gaps = [] when sufficient; list at most 3, most important first).",
 );
 
-const INVESTIGATOR = sys(
-  "You are investigating ONE sub-question of a larger task. Read the relevant files, list " +
-    "directories, and grep to find code rather than guessing. Output in THIS exact structure " +
-    "so the evidence stays machine-usable downstream:\n" +
-    "VERIFIED: bullet facts each backed by a file:line citation (only things you actually confirmed).\n" +
-    "ASSUMPTIONS: bullets you inferred but did NOT confirm (or 'none').\n" +
-    "UNKNOWN: what you could not determine (or 'none').\n" +
-    "Be dense, no filler, no restating the question. Never put an unconfirmed claim under VERIFIED.",
-);
+const INVESTIGATOR = (budget: number) =>
+  sys(
+    "You are investigating ONE sub-question of a larger task. Read the relevant files, list " +
+      "directories, and grep to find code rather than guessing. Work FAST: batch ALL independent " +
+      "reads/searches into ONE turn as multiple tool calls (never one read per turn), never re-read " +
+      `content already in this conversation, and you have a HARD budget of ${budget} tool turns — ` +
+      "the moment you can answer, stop investigating and write the structured output.\n" +
+      "Output in THIS exact structure so the evidence stays machine-usable downstream:\n" +
+      "VERIFIED: bullet facts each backed by a file:line citation (only things you actually confirmed).\n" +
+      "ASSUMPTIONS: bullets you inferred but did NOT confirm (or 'none').\n" +
+      "UNKNOWN: what you could not determine (or 'none').\n" +
+      "Be dense, no filler, no restating the question. Never put an unconfirmed claim under VERIFIED.",
+  );
 
 const DRAFT_FROM_EVIDENCE = usr(
   "Using the gathered findings above as the primary source of truth, produce the best " +
@@ -409,11 +413,11 @@ export async function runRecurrentReasoning(
   const think = async (
     messages: ApiMessage[],
     model: string | undefined,
-    o: { tools?: boolean; readOnly?: boolean } = {},
+    o: { tools?: boolean; readOnly?: boolean; tag?: string } = {},
   ): Promise<string> => {
     const start = performance.now();
     const usesTools = opts.useTools && o.tools !== false;
-    const tag = phaseTag;
+    const tag = o.tag ?? phaseTag;
     let result: string;
     if (usesTools) {
       result = await runAgent(
@@ -433,6 +437,11 @@ export async function runRecurrentReasoning(
           signal: opts.signal,
           readOnly: o.readOnly,
           cancelId: opts.runId,
+          // Reasoning-phase tool loops are capped by the effort budget: useful
+          // reads saturate after a handful of turns (1.4.1 e2e measurement),
+          // while an uncapped loop wanders one-read-per-turn with ballooning
+          // context. The execute fast path is NOT routed through think().
+          maxIterations: effort.phaseIterations,
         },
       );
     } else {
@@ -448,27 +457,22 @@ export async function runRecurrentReasoning(
     return result;
   };
 
-  // ── Phase 0 — Does this task require real execution (side effects)? ──────────
-  // Deep-think's analysis loops are read-only. When tools are on and the task
-  // needs writes/commands/git, we skip the heavy read-only analysis and hand the
-  // plan straight to a real executor (fast path below) instead of producing — and
-  // possibly hallucinating — a "done" essay it cannot actually carry out.
+  // ── Phase 0 ∥ Phase A — exec classification and the solution brief ──────────
+  // The NEEDS_EXEC verdict (does this task require side effects?) and the
+  // strong-model brief are independent, so they run in PARALLEL: total latency
+  // is the slower of the two instead of their sum. Deep-think's analysis loops
+  // are read-only; when the task needs writes/commands/git we skip them and
+  // hand the plan straight to a real executor (fast path below).
   let needsExec = false;
-  if (opts.useTools) {
-    phaseTag = "classify";
-    const verdict = await think([...base, NEEDS_EXEC], thinking, { tools: false });
-    if (aborted()) {
-      logSummary();
-      return;
-    }
-    needsExec = parseNeedsExec(verdict);
-  }
-
   try {
-    // ── Phase A — Solution brief (strong model designs intent + criteria + plan)
-    phaseTag = "brief";
-    const briefText = await think([...base, BRIEF(breadth)], synthesis, { tools: false });
+    const [verdict, briefText] = await Promise.all([
+      opts.useTools
+        ? think([...base, NEEDS_EXEC], thinking, { tools: false, tag: "classify" })
+        : Promise.resolve(""),
+      think([...base, BRIEF(breadth)], synthesis, { tools: false, tag: "brief" }),
+    ]);
     if (aborted()) return;
+    needsExec = opts.useTools && parseNeedsExec(verdict);
     const brief = parseBrief(briefText, breadth);
     cb.onThought("設計（ブリーフ）", synthLabel, briefText);
     // The brief anchors every later phase: investigation, the verifier's rubric,
@@ -572,9 +576,11 @@ export async function runRecurrentReasoning(
 
     // ── Phase B — Investigation (cheap model, read-only, grounded) ──────────────
     const investigate = async (q: string, label: string): Promise<string> => {
-      const r = await think([...base, ...briefMsgs, INVESTIGATOR, usr(`Sub-question: ${q}`)], thinking, {
-        readOnly: true,
-      });
+      const r = await think(
+        [...base, ...briefMsgs, INVESTIGATOR(effort.phaseIterations), usr(`Sub-question: ${q}`)],
+        thinking,
+        { readOnly: true },
+      );
       cb.onThought(label, thinkingLabel, r);
       return `### 調査: ${q}\n${r}`;
     };

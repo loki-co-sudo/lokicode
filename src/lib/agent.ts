@@ -434,6 +434,11 @@ export interface AgentOptions {
   /** Restrict to read-only tools (no write_file/run_command): lets investigation
    * phases run unattended and in parallel without approval prompts. */
   readOnly?: boolean;
+  /** Per-run cap on tool-loop rounds, overriding the global setting. Used by
+   * deep-think's read-only phases (investigation/refine) whose useful work
+   * saturates after a handful of reads — without a cap a small model wanders
+   * one-read-per-turn for dozens of rounds (latency + ballooning context). */
+  maxIterations?: number;
   /** Offer the ask_user tool (interactive top-level agent only). */
   allowAskUser?: boolean;
   /** Run id for backend cancellation; lets Stop abort an in-flight API call. */
@@ -472,7 +477,7 @@ export async function runAgent(
   const baseTools = opts.readOnly ? READ_ONLY_TOOLS : TOOLS;
   const advertised =
     opts.allowAskUser && cb.askUser ? [...baseTools, ASK_USER_TOOL] : baseTools;
-  const maxIterations = getMaxIterations();
+  const maxIterations = opts.maxIterations ?? getMaxIterations();
   // Live timing to the F12 console so a long agent loop isn't a black box: each
   // iteration logs its LLM round-trip time, tool calls, and per-tool durations.
   const trace = opts.traceTag ?? "agent";

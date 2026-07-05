@@ -84,14 +84,19 @@ export interface EffortParams {
   /** Parallel LLM-as-judge samples per verify round (score = min, defects =
    * union) — self-consistency smoothing for the verifier, quality tier only. */
   judgeSamples: number;
+  /** Max tool-loop rounds for deep-think's read-only phases (investigation /
+   * refine). Measured in the 1.4.1 e2e run: information saturates after ~6-8
+   * reads; beyond that a small model re-reads files one turn at a time while
+   * the context (and latency) balloons. */
+  phaseIterations: number;
 }
 
 /** Width/threshold steps follow the diminishing-returns curve of parallel
  * sampling (the 1→2 gain is the largest; 3+ tapers off). */
 export const EFFORT_PARAMS: Record<EffortLevel, EffortParams> = {
-  speed: { passScore: 78, escalateBelow: 60, ensembleSamples: 1, sufficiencyRounds: 1, judgeSamples: 1 },
-  balanced: { passScore: 85, escalateBelow: 70, ensembleSamples: 2, sufficiencyRounds: 2, judgeSamples: 1 },
-  quality: { passScore: 92, escalateBelow: 78, ensembleSamples: 3, sufficiencyRounds: 3, judgeSamples: 2 },
+  speed: { passScore: 78, escalateBelow: 60, ensembleSamples: 1, sufficiencyRounds: 1, judgeSamples: 1, phaseIterations: 6 },
+  balanced: { passScore: 85, escalateBelow: 70, ensembleSamples: 2, sufficiencyRounds: 2, judgeSamples: 1, phaseIterations: 10 },
+  quality: { passScore: 92, escalateBelow: 78, ensembleSamples: 3, sufficiencyRounds: 3, judgeSamples: 2, phaseIterations: 14 },
 };
 
 export const DEFAULT_EFFORT: EffortLevel = "balanced";

@@ -29,6 +29,8 @@ describe("effort presets", () => {
     expect(b.sufficiencyRounds).toBeLessThanOrEqual(q.sufficiencyRounds);
     expect(s.judgeSamples).toBeLessThanOrEqual(b.judgeSamples);
     expect(b.judgeSamples).toBeLessThanOrEqual(q.judgeSamples);
+    expect(s.phaseIterations).toBeLessThan(b.phaseIterations);
+    expect(b.phaseIterations).toBeLessThan(q.phaseIterations);
   });
 
   it("multi-sample judge is a quality-tier-only spend (adaptive compute)", () => {

@@ -41,6 +41,59 @@ export const SYNTH_RECOMMENDED_INTELLIGENCE = 45;
  * escalations (cost) pile up. */
 export const THINKING_MIN_INTELLIGENCE = 25;
 
+// ── Effective-level estimate (specs/speed-and-level.md §3) ───────────────────
+// Test-time-compute research consistently shows verifier-guided refinement +
+// best-of-N buys roughly "one tier" of effective capability over a single call
+// (≈ +10 AA-index points), with hard diminishing returns beyond that. The
+// synthesis model dominates final quality; weak evidence (thinking model)
+// caps the gain. This is an honest heuristic, not a benchmark.
+
+/** Max uplift the pipeline can add over the bare synthesis model. */
+export const MAX_UPLIFT = 12;
+
+export interface EffectiveLevelParams {
+  depth: number;
+  useTools: boolean;
+  breadth: number;
+  ensembleSamples: number;
+  judgeSamples: number;
+}
+
+export interface EffectiveLevel {
+  /** AA intelligence index of the bare synthesis model. */
+  base: number;
+  /** Estimated pipeline gain over the bare model (already capped/penalized). */
+  uplift: number;
+  /** base + uplift, rounded. */
+  effective: number;
+  /** True when the weak-evidence penalty (thinking index < 25) was applied. */
+  evidencePenalty: boolean;
+}
+
+/** Estimate what "level of model" the deep-think pipeline effectively runs at
+ * for a given model pair + settings. Returns null when the synthesis model's
+ * intelligence index is unknown (no honest estimate possible). */
+export function estimateEffectiveLevel(
+  thinkingIdx: number | null,
+  synthesisIdx: number | null,
+  p: EffectiveLevelParams,
+): EffectiveLevel | null {
+  if (synthesisIdx == null) return null;
+  const ensemble = p.ensembleSamples > 1 && (p.breadth > 1 || p.depth >= 3);
+  let uplift = 0;
+  if (p.useTools) uplift += 2; // grounded investigation
+  uplift += 1.5 * Math.min(Math.max(0, p.depth), 3); // verify×refine, saturates at 3
+  if (ensemble) uplift += p.ensembleSamples >= 3 ? 3 : 2; // MoA + best-of-N
+  if (p.judgeSamples >= 2) uplift += 1; // judge self-consistency
+  if (p.breadth >= 2) uplift += 1; // independent investigation angles
+  uplift = Math.min(uplift, MAX_UPLIFT);
+  // Weak evidence caps the gain: refinement can't fix what was never observed.
+  const evidencePenalty = thinkingIdx != null && thinkingIdx < 25;
+  if (evidencePenalty) uplift /= 2;
+  const effective = Math.round(synthesisIdx + uplift);
+  return { base: synthesisIdx, uplift: Math.round(uplift * 10) / 10, effective, evidencePenalty };
+}
+
 const SYNTH_ADVICE =
   "設定で合成モデルを中堅以上（例 google/gemini-2.5-pro、deepseek/deepseek-v4-pro、anthropic/claude-opus 系）にしてください。";
 const THINK_ADVICE =

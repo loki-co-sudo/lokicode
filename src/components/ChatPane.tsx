@@ -32,7 +32,7 @@ import {
 } from "../lib/agentSettings";
 import { classifyTask } from "../lib/router";
 import { LOOP_MAX_ATTEMPTS, errorSignature, evidenceTail } from "../lib/loop";
-import { assessDeepThinkReadiness } from "../lib/modelGate";
+import { assessDeepThinkReadiness, estimateEffectiveLevel } from "../lib/modelGate";
 import {
   runAgent,
   commandRisk,
@@ -511,6 +511,19 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     () => assessDeepThinkReadiness(effThinking, synthesisModel || model, models),
     [effThinking, synthesisModel, model, models],
   );
+  // Pre-run estimate of what "level of model" the pipeline effectively runs
+  // at for this model pair + settings (specs/speed-and-level.md §3).
+  const effectiveLevel = useMemo(() => {
+    const idxOf = (id: string) => models.find((x) => x.id === id)?.intelligenceIndex ?? null;
+    const p = EFFORT_PARAMS[effortLevel];
+    return estimateEffectiveLevel(idxOf(effThinking), idxOf(synthesisModel || model), {
+      depth,
+      useTools: agentMode,
+      breadth: samples,
+      ensembleSamples: ensemble ? p.ensembleSamples : 1,
+      judgeSamples: p.judgeSamples,
+    });
+  }, [models, effThinking, synthesisModel, model, depth, samples, agentMode, ensemble, effortLevel]);
   // Calibration learned from real usage; refreshed after each run.
   const [calib, setCalib] = useState(() => loadCalib());
 
@@ -1661,6 +1674,23 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
                   </span>
                 )}
                 {costEstimate.calibrated && <span className="text-emerald-600/80" title="過去の実使用量から補正済み">✓ 実測補正</span>}
+              </div>
+              <div
+                className="flex w-full items-center gap-1 text-[11px] text-neutral-500"
+                title="モデルの知能指数（Artificial Analysis）と設定（検証の深さ・アンサンブル・接地・judge多数決）から、このパイプラインが単発呼び出し比でどの級の賢さで動くかを推定した目安。検証器ガイドの反復や best-of-N の効果は研究上おおむね1ティア（指数+10前後）で飽和し、思考モデルが弱い（指数25未満）と証拠品質が天井になり効果は半減します。ベンチマーク実測ではありません。"
+              >
+                <span>🧠 実効レベル(推定):</span>
+                {effectiveLevel ? (
+                  <>
+                    <span className="font-mono text-violet-300">指数 ~{effectiveLevel.effective}</span>
+                    <span className="text-neutral-600">
+                      （合成モデル単発 {Math.round(effectiveLevel.base)} ＋パイプライン +{effectiveLevel.uplift}
+                      {effectiveLevel.evidencePenalty ? "・思考モデルが弱いため効果半減" : ""}）
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-neutral-600">推定不能（モデルの知能指数が未公開）</span>
+                )}
               </div>
             </>
           )}
