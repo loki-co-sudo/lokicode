@@ -124,6 +124,13 @@ describe("pipelineShape", () => {
     expect(s.finalPlain).toBe(4); // 3 candidates + 1 select
   });
 
+  it("multiplies judge calls by judgeSamples (quality effort), refine unchanged", () => {
+    const s = pipelineShape(3, 1, true, 2, 2);
+    expect(s.judge).toBe(6); // depth 3 × 2 parallel judges
+    expect(s.refine).toBe(3);
+    expect(pipelineShape(3, 1, true, 2, 1).judge).toBe(3);
+  });
+
   it("adds one grounding investigation on ensemble runs with breadth 1 + tools", () => {
     expect(pipelineShape(3, 1, true).invest).toBe(1); // ensemble, no breadth → ground once
     expect(pipelineShape(3, 1, false).invest).toBe(0); // no tools → cannot investigate

@@ -582,6 +582,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       synthesis: priceOf(synthesisModel || model),
       calib,
       ensembleSamples: EFFORT_PARAMS[effortLevel].ensembleSamples,
+      judgeSamples: EFFORT_PARAMS[effortLevel].judgeSamples,
     });
   }, [models, promptTokens, depth, samples, agentMode, thinkingModel, synthesisModel, model, calib, effortLevel]);
 
@@ -885,25 +886,39 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     // (trivial→chat / agent→tools / deep→deep pipeline), overriding the toggles.
     let useDeep = deepReasoning;
     let useAgent = agentMode;
-    // When the router itself judged the task "deep" we trust that signal and run
-    // the pipeline thoroughly (deeper verify, more samples, ensemble draft),
-    // rather than leaving the manual sliders to decide effort for a hard task.
-    let routedHard = false;
+    // Router-linked difficulty (specs/router-effort-link.md §2): when the router
+    // judged the task deep/deep-hard, raise depth/breadth accordingly — the
+    // sliders act as lower bounds, and deep-hard also forces the ensemble on.
+    let effDepth = depth;
+    let effSamples = samples;
+    let effEnsemble = ensemble;
     if (autoRoute) {
       const route = await classifyTask(text, model || undefined);
+      const routeLabel =
+        route === "deep-hard"
+          ? "ディープシンク（高強度）"
+          : route === "deep"
+            ? "ディープシンク"
+            : route === "agent"
+              ? "Agent"
+              : "チャット";
       appendItem({
         kind: "thought",
         label: "自動振り分け",
         model: "router",
-        content: `判定: ${route}（${route === "deep" ? "ディープシンク" : route === "agent" ? "Agent" : "チャット"}）`,
+        content: `判定: ${route}（${routeLabel}）`,
       });
-      useDeep = route === "deep";
+      useDeep = route === "deep" || route === "deep-hard";
       useAgent = route !== "trivial";
-      routedHard = route === "deep";
+      if (route === "deep") {
+        effDepth = Math.max(depth, 3);
+        effSamples = Math.max(samples, 2);
+      } else if (route === "deep-hard") {
+        effDepth = Math.max(depth, 5);
+        effSamples = Math.max(samples, 3);
+        effEnsemble = true;
+      }
     }
-    const effDepth = routedHard ? Math.max(depth, 4) : depth;
-    const effSamples = routedHard ? Math.max(samples, 3) : samples;
-    const effEnsemble = routedHard ? true : ensemble;
 
     try {
       if (useDeep) {
@@ -1100,6 +1115,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           effSamples,
           true,
           EFFORT_PARAMS[effortLevel].ensembleSamples,
+          EFFORT_PARAMS[effortLevel].judgeSamples,
         );
         const actualLoop = Math.max(1, callCountRef.current - plain);
         recordToolRun(actualLoop, loop);
@@ -1503,8 +1519,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             checked={deepReasoning}
             onChange={setDeepReasoning}
             accent="bg-indigo-500"
-            label="ディープシンク (beta)"
-            title="【実験的機能・beta】ドラフト→内省→合成を反復して回答の質を上げます（API 呼び出しが増え高コスト）。挙動・品質は今後も改良予定です。"
+            label="ディープシンク"
+            title="設計ブリーフ→接地調査→ドラフト→検証→合成の多段パイプラインで回答の質を上げます（API 呼び出しが増え高コスト）。難しい調査・設計・デバッグ向け。モデル構成が要件を満たさないときは警告が出ます。"
             disabled={autoRoute}
           />
           <Toggle
@@ -1512,7 +1528,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onChange={setAutoRoute}
             accent="bg-teal-500"
             label="オート"
-            title="ON: 依頼の難易度を自動判定し、チャット/Agent/ディープシンクを自動で振り分けます（易しい依頼を高速・低コストに）。Agent・ディープシンクトグルより優先。"
+            title="ON: 依頼の難易度を4段階（trivial/agent/deep/deep-hard）で自動判定し、チャット/Agent/ディープシンクを自動で振り分けます（易しい依頼を高速・低コストに、極めて難しい依頼は深さ・広さを自動底上げ）。Agent・ディープシンクトグルより優先。"
           />
           {agentMode && (
             <div

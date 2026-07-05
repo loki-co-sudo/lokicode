@@ -81,14 +81,17 @@ export interface EffortParams {
   ensembleSamples: number;
   /** Max sufficiency→gap-fill rounds before drafting. */
   sufficiencyRounds: number;
+  /** Parallel LLM-as-judge samples per verify round (score = min, defects =
+   * union) — self-consistency smoothing for the verifier, quality tier only. */
+  judgeSamples: number;
 }
 
 /** Width/threshold steps follow the diminishing-returns curve of parallel
  * sampling (the 1→2 gain is the largest; 3+ tapers off). */
 export const EFFORT_PARAMS: Record<EffortLevel, EffortParams> = {
-  speed: { passScore: 78, escalateBelow: 60, ensembleSamples: 1, sufficiencyRounds: 1 },
-  balanced: { passScore: 85, escalateBelow: 70, ensembleSamples: 2, sufficiencyRounds: 2 },
-  quality: { passScore: 92, escalateBelow: 78, ensembleSamples: 3, sufficiencyRounds: 3 },
+  speed: { passScore: 78, escalateBelow: 60, ensembleSamples: 1, sufficiencyRounds: 1, judgeSamples: 1 },
+  balanced: { passScore: 85, escalateBelow: 70, ensembleSamples: 2, sufficiencyRounds: 2, judgeSamples: 1 },
+  quality: { passScore: 92, escalateBelow: 78, ensembleSamples: 3, sufficiencyRounds: 3, judgeSamples: 2 },
 };
 
 export const DEFAULT_EFFORT: EffortLevel = "balanced";

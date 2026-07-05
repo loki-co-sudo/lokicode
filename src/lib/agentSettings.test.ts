@@ -27,6 +27,14 @@ describe("effort presets", () => {
     expect(b.ensembleSamples).toBeLessThanOrEqual(q.ensembleSamples);
     expect(s.sufficiencyRounds).toBeLessThanOrEqual(b.sufficiencyRounds);
     expect(b.sufficiencyRounds).toBeLessThanOrEqual(q.sufficiencyRounds);
+    expect(s.judgeSamples).toBeLessThanOrEqual(b.judgeSamples);
+    expect(b.judgeSamples).toBeLessThanOrEqual(q.judgeSamples);
+  });
+
+  it("multi-sample judge is a quality-tier-only spend (adaptive compute)", () => {
+    expect(EFFORT_PARAMS.speed.judgeSamples).toBe(1);
+    expect(EFFORT_PARAMS.balanced.judgeSamples).toBe(1);
+    expect(EFFORT_PARAMS.quality.judgeSamples).toBe(2);
   });
 
   it("speed disables the ensemble (width 1)", () => {

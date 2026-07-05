@@ -663,12 +663,19 @@ export async function runRecurrentReasoning(
       // Strong verifier: the critic runs on the synthesis (strong) model so the
       // "smart-enough floor" is met even when the thinking model is a weak/free
       // router — otherwise a weak judge misses errors (e.g. wrong file paths).
-      const verdict = await think(
-        [...base, ...ctx, { role: "assistant", content: draft }, JUDGE],
-        synthesis,
-        { tools: false },
+      // Quality effort runs several judges in parallel (self-consistency): the
+      // combined score is the MIN (a lenient sample can't mask a defect) and the
+      // defect lists are merged. See specs/router-effort-link.md §3.
+      const verdicts = await Promise.all(
+        Array.from({ length: Math.max(1, effort.judgeSamples) }, () =>
+          think([...base, ...ctx, { role: "assistant", content: draft }, JUDGE], synthesis, {
+            tools: false,
+          }),
+        ),
       );
-      const { score, defects } = parseJudgment(verdict);
+      const parsed = verdicts.map(parseJudgment);
+      const score = Math.min(...parsed.map((p) => p.score));
+      const defects = [...new Set(parsed.flatMap((p) => p.defects))];
       cb.onThought(
         `検証 ${k}/${depth}（スコア ${score}）`,
         synthLabel,

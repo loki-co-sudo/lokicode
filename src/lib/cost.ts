@@ -109,6 +109,8 @@ export interface EstimateParams {
   calib?: Calib;
   /** Effort preset's ensemble width (defaults to the balanced preset's 2). */
   ensembleSamples?: number;
+  /** Effort preset's parallel judge samples (defaults to 1). */
+  judgeSamples?: number;
 }
 
 /** Per-phase structural call counts of the orchestrated pipeline
@@ -140,10 +142,13 @@ export function pipelineShape(
   useTools: boolean,
   /** Effort preset's MoA / best-of-N width (1 disables the ensemble). */
   ensembleSamples = 2,
+  /** Effort preset's parallel judge samples per verify round. */
+  judgeSamples = 1,
 ): PipelineShape {
   const breadth = Math.max(1, Math.min(5, Math.floor(samples)));
   const d = Math.max(0, Math.floor(depth));
   const N = Math.max(1, Math.floor(ensembleSamples));
+  const J = Math.max(1, Math.floor(judgeSamples));
   const ensemble = N > 1 && (breadth > 1 || d >= 3);
   // Minimum grounding: an ensemble run with no investigation drafts tool-less,
   // so reasoning.ts inserts one read-only investigation of the GOAL first.
@@ -153,7 +158,7 @@ export function pipelineShape(
     brief: 1,
     invest: breadth > 1 ? breadth : grounding,
     suff: breadth > 1 ? 1 : 0,
-    judge: d,
+    judge: d * J,
     refine: d,
     draftLoop: ensemble ? 0 : 1,
     draftPlain: ensemble ? N + 1 : 0,
@@ -170,8 +175,9 @@ export function structuralCalls(
   samples: number,
   useTools: boolean,
   ensembleSamples = 2,
+  judgeSamples = 1,
 ): { loop: number; plain: number } {
-  const s = pipelineShape(depth, samples, useTools, ensembleSamples);
+  const s = pipelineShape(depth, samples, useTools, ensembleSamples, judgeSamples);
   return {
     loop: s.invest + s.refine + s.draftLoop + s.finalLoop,
     plain: s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain,
@@ -191,7 +197,7 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const thinkOut = calib.outTokens;
   const synthOut = Math.round(calib.outTokens * SYNTH_PREMIUM);
   const mult = p.useTools ? calib.toolMult : 1;
-  const sh = pipelineShape(p.depth, p.samples, p.useTools, p.ensembleSamples ?? 2);
+  const sh = pipelineShape(p.depth, p.samples, p.useTools, p.ensembleSamples ?? 2, p.judgeSamples ?? 1);
 
   // Guard against negative / non-finite prices (e.g. a "-1" variable-price
   // sentinel) so the estimate can never go absurdly negative.
