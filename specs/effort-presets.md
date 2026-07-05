@@ -34,6 +34,12 @@ lokicode の推論パイプライン（Agent / ディープシンク）には品
 | escalateBelow（強モデル昇格の閾値） | 60 | 70 | 78 |
 | ensembleSamples（MoA/best-of-N の幅） | 1（=無効） | 2 | 3 |
 | sufficiencyRounds（十分性ゲート最大回数） | 1 | 2 | 3 |
+| judgeSamples（judge 並列本数・1.4.0 追加） | 1 | 1 | 2 |
+| phaseIterations（読み取り専用フェーズの反復上限・1.5.0 追加） | 6 | 10 | 14 |
+
+> **現状ノート**: judgeSamples の設計根拠は [router-effort-link.md](router-effort-link.md) §3、
+> phaseIterations は [speed-and-level.md](speed-and-level.md) §2.1。現在の正の値は
+> `src/lib/agentSettings.ts` の `EFFORT_PARAMS`。
 
 - 幅・閾値は §1 の「1→2 が最大の伸び、3 で逓減」に沿って設定。
 - `ensembleSamples: 1` はアンサンブル自体を無効化（トグルより優先して安く・速く）。

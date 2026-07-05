@@ -1677,7 +1677,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               </div>
               <div
                 className="flex w-full items-center gap-1 text-[11px] text-neutral-500"
-                title="モデルの知能指数（Artificial Analysis）と設定（検証の深さ・アンサンブル・接地・judge多数決）から、このパイプラインが単発呼び出し比でどの級の賢さで動くかを推定した目安。検証器ガイドの反復や best-of-N の効果は研究上おおむね1ティア（指数+10前後）で飽和し、思考モデルが弱い（指数25未満）と証拠品質が天井になり効果は半減します。ベンチマーク実測ではありません。"
+                title="モデルの知能指数（Artificial Analysis）と設定（検証の深さ・アンサンブル・接地・judge多数決）から、このパイプラインが単発呼び出し比でどの級の賢さで動くかを推定した目安。現在のパイプライン構成（再サンプル型の計算増）では効果は研究上おおむね1ティア（指数+10前後）で飽和し、思考モデルが弱い（指数25未満）と証拠品質が天井になり効果は半減します。ベンチマーク実測ではありません。"
               >
                 <span>🧠 実効レベル(推定):</span>
                 {effectiveLevel ? (

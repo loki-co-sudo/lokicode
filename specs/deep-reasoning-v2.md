@@ -3,6 +3,15 @@
 > **注記 (0.40.0)**: v2 を正式採用し、**旧 v1 線形ループと巻き戻し機構（`USE_ORCHESTRATOR` /
 > `runLinearRecurrentReasoning`）は削除しました**。以下の各節に残る「復元手順」は**歴史的経緯**で、
 > 現行コードには該当フラグ/関数はありません（戻す方針は取りません）。本書は v2 の設計記録として残します。
+>
+> **現状ノート (1.5.0)**: 本書に登場する固定定数 `PASS_SCORE(85)` / `ESCALATE_BELOW(70)` /
+> `ENSEMBLE_SAMPLES(=2)` / `MAX_SUFFICIENCY_ROUNDS(2)` は **1.1.0 で推論エフォート
+> （[effort-presets.md](effort-presets.md)）に置換済み**。現在の正の値は
+> `src/lib/agentSettings.ts` の `EFFORT_PARAMS`（速度/バランス/品質）。その後の主な発展:
+> judge の強モデル化＋多数決（[router-effort-link.md](router-effort-link.md)）、最小接地
+> （effort-presets §4）、フェーズ反復バジェットと classify∥brief 並列化
+> （[speed-and-level.md](speed-and-level.md)）、モデル要件ゲート（[model-gate.md](model-gate.md)）。
+> 今後の計画は [frontier-roadmap.md](frontier-roadmap.md)。
 
 実装: [`src/lib/reasoning.ts`](../src/lib/reasoning.ts)、
 [`src/lib/agent.ts`](../src/lib/agent.ts)（読み取り専用ツールモード）、

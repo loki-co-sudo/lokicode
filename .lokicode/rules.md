@@ -2,8 +2,8 @@
 
 ## まず読む
 - AI 機能（agent.ts / reasoning.ts / router.ts / cost.ts / agentSettings.ts）を変更する前に、
-  CLAUDE.md の「開発ガイド」と specs/ の該当仕様（deep-reasoning-v2.md / agent-v3.md /
-  effort-presets.md）を read_file で読むこと。推測で書かない。
+  CLAUDE.md の「開発ガイド」と specs/README.md（仕様の索引）から該当仕様を read_file で
+  読むこと。次に実装すべき改善は specs/frontier-roadmap.md にある。推測で書かない。
 
 ## 効率の5原則（AI 機能の変更はこれに沿う）
 1. 反復・サンプリング処理には必ず「停止条件」と「易しい課題でのスキップ条件」を付ける。
