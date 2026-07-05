@@ -22,6 +22,7 @@ import {
 } from "./agentSettings";
 import { LOOP_MAX_ATTEMPTS } from "./loop";
 import { runVerifyLoop } from "./verifyLoop";
+import { buildRepoMap } from "./repoMap";
 
 export interface ReasoningCallbacks {
   /** Emitted for the draft and each reflection (thinking phases). */
@@ -512,6 +513,29 @@ export async function runRecurrentReasoning(
     return result;
   };
 
+  // ── Repository map (frontier-roadmap P2) ─────────────────────────────────────
+  // A file→symbol index built with ONE local grep (fast, not an LLM call). Given
+  // to the architect and investigators so they target reads instead of exploring
+  // the tree one grep/read at a time — a context-engineering lever outside the
+  // resampling ceiling. Empty (skipped) when there is no workspace or on failure.
+  let repoMapMsgs: ApiMessage[] = [];
+  if (opts.useTools && opts.workspaceRoot) {
+    const mapStart = performance.now();
+    const map = await buildRepoMap(opts.workspaceRoot);
+    if (map) {
+      repoMapMsgs = [
+        sys(
+          "リポジトリ地図（ファイル→主要シンボルの一覧。読む場所の当たりをつけるのに使う。" +
+            "網羅ではなく、正確な内容は必ず read_file / grep_search で確認すること）:\n\n" +
+            map,
+        ),
+      ];
+      console.log(
+        `[deepthink] repomap · ${((performance.now() - mapStart) / 1000).toFixed(1)}s · ${map.length}c`,
+      );
+    }
+  }
+
   // ── Phase 0 ∥ Phase A — exec classification and the solution brief ──────────
   // The NEEDS_EXEC verdict (does this task require side effects?) and the
   // strong-model brief are independent, so they run in PARALLEL: total latency
@@ -524,7 +548,7 @@ export async function runRecurrentReasoning(
       opts.useTools
         ? think([...base, NEEDS_EXEC], thinking, { tools: false, tag: "classify" })
         : Promise.resolve(""),
-      think([...base, BRIEF(breadth, opts.decompose === true)], synthesis, {
+      think([...base, ...repoMapMsgs, BRIEF(breadth, opts.decompose === true)], synthesis, {
         tools: false,
         tag: "brief",
       }),
@@ -621,14 +645,17 @@ export async function runRecurrentReasoning(
         },
       };
       const planMsg = sys(`実行する計画（設計ブリーフ。これに沿って実際に作業すること）:\n\n${briefText}`);
-      await runAgent([...base, ...briefMsgs, planMsg, EXECUTE], execCb, execOpts);
+      // The repo map (P2) is handed to the executor too, so it edits the right
+      // files without first re-discovering the tree.
+      const execCtx = [...base, ...briefMsgs, ...repoMapMsgs, planMsg];
+      await runAgent([...execCtx, EXECUTE], execCb, execOpts);
 
       // Guard against premature no-op stops: if the executor finished without using
       // any tool, it just narrated intent instead of acting — nudge it once to do
       // the work for real (firmer instruction).
       if (!aborted() && toolCount === 0) {
         cb.onThought("実行の再指示", thinkingLabel, "ツールを使わず終了したため、実際に作業するよう再指示します。");
-        await runAgent([...base, ...briefMsgs, planMsg, EXECUTE_FORCE], execCb, execOpts);
+        await runAgent([...execCtx, EXECUTE_FORCE], execCb, execOpts);
       }
 
       const exMs = performance.now() - exStart;
@@ -653,7 +680,7 @@ export async function runRecurrentReasoning(
               timeoutSecs: getCommandTimeout(),
             }),
           fix: async (fixPrompt) => {
-            await runAgent([...base, ...briefMsgs, planMsg, usr(fixPrompt)], execCb, execOpts);
+            await runAgent([...execCtx, usr(fixPrompt)], execCb, execOpts);
           },
           onCommandStart: (command) => cb.onToolStart({ name: "run_command", args: { command } }),
           onCommandEnd: (ok, log) => cb.onToolEnd(ok ? "done" : "error", log),
@@ -673,7 +700,13 @@ export async function runRecurrentReasoning(
     // ── Phase B — Investigation (cheap model, read-only, grounded) ──────────────
     const investigate = async (q: string, label: string): Promise<string> => {
       const r = await think(
-        [...base, ...briefMsgs, INVESTIGATOR(effort.phaseIterations), usr(`Sub-question: ${q}`)],
+        [
+          ...base,
+          ...briefMsgs,
+          ...repoMapMsgs,
+          INVESTIGATOR(effort.phaseIterations),
+          usr(`Sub-question: ${q}`),
+        ],
         thinking,
         { readOnly: true },
       );

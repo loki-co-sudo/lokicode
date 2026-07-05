@@ -164,7 +164,8 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
     }
     case "grep_search": {
       toolLog.push({ name: "grep_search", arg: String(args.pattern) });
-      return grepSearch(String(args.root), String(args.pattern)) as T;
+      const max = args.maxResults != null ? Number(args.maxResults) : 200;
+      return grepSearch(String(args.root), String(args.pattern), max) as T;
     }
     case "write_text_file":
       throw new Error("harness: write_text_file must not be called in read-only analysis runs");
