@@ -31,7 +31,8 @@ import {
   type EffortLevel,
 } from "../lib/agentSettings";
 import { classifyTask } from "../lib/router";
-import { LOOP_MAX_ATTEMPTS, errorSignature, evidenceTail } from "../lib/loop";
+import { LOOP_MAX_ATTEMPTS } from "../lib/loop";
+import { runVerifyLoop } from "../lib/verifyLoop";
 import { assessDeepThinkReadiness, estimateEffectiveLevel } from "../lib/modelGate";
 import {
   runAgent,
@@ -945,6 +946,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             useTools: useAgent,
             approval,
             workspaceRoot: workspaceRoot ?? undefined,
+            // Solve-level decomposition (P3): allowed on deep-routed runs; the
+            // brief itself decides whether the task actually decomposes.
+            decompose: true,
             ensemble: effEnsemble,
             signal,
             runId,
@@ -1032,68 +1036,27 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         }
         if (verifyCmd && editedRef.current && !signal.aborted) {
           const maxAttempts = loopMode ? LOOP_MAX_ATTEMPTS : MAX_VERIFY_ATTEMPTS;
-          let prevSig: string | null = null;
-          for (let attempt = 1; attempt <= maxAttempts && !signal.aborted; attempt++) {
-            appendItem({ kind: "tool", name: "run_command", args: { command: verifyCmd }, status: "running" });
-            let result: { stdout: string; stderr: string; code: number };
-            try {
-              result = await invoke("run_command", {
-                command: verifyCmd,
+          await runVerifyLoop(verifyCmd, maxAttempts, {
+            exec: (command) =>
+              invoke("run_command", {
+                command,
                 cwd: workspaceRoot ?? null,
                 timeoutSecs: getCommandTimeout(),
-              });
-            } catch (e) {
-              updateLastTool("error", `検証コマンド実行エラー: ${e instanceof Error ? e.message : String(e)}`);
-              break;
-            }
-            const log = `exit code: ${result.code}\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`;
-            if (result.code === 0) {
-              updateLastTool("done", log);
-              appendItem({
-                kind: "assistant",
-                content:
-                  `✅ 検証コマンド \`${verifyCmd}\` が成功しました（試行 ${attempt}/${maxAttempts}）。\n\n` +
-                  `通過の証拠（出力の末尾）:\n\`\`\`\n${evidenceTail(result.stdout + "\n" + result.stderr)}\n\`\`\``,
-              });
-              break;
-            }
-            updateLastTool("error", log);
-            // Stuck detection: the same normalized failure twice in a row means
-            // the model is looping on one idea — stop and hand off instead of
-            // burning more attempts on it.
-            const sig = errorSignature(log);
-            if (prevSig !== null && sig === prevSig) {
-              appendItem({
-                kind: "assistant",
-                content:
-                  `🛑 同じエラーが2回連続で発生したため、ループを停止しました（思考が固着している可能性）。\n` +
-                  `**新しいスレッド（別コンテキスト）で修復を依頼する**か、より強いモデルに切り替えて再試行してください。エラーログは上のカードで確認できます。`,
-              });
-              break;
-            }
-            prevSig = sig;
-            if (attempt >= maxAttempts) {
-              appendItem({
-                kind: "assistant",
-                content: `⚠️ 検証コマンドが ${maxAttempts} 回試しても失敗しました。残っている問題は上のエラーログのとおりです。手動で確認してください。`,
-              });
-              break;
-            }
-            const clipped =
-              log.length > 6000 ? log.slice(0, 3000) + "\n…(中略)…\n" + log.slice(-3000) : log;
-            const fixMsgs: ApiMessage[] = [
-              ...base,
-              { role: "assistant", content: finalAnswer },
-              {
-                role: "user",
-                content:
-                  `検証コマンド \`${verifyCmd}\` が失敗しました。出力:\n\n${clipped}\n\n` +
-                  `このエラーの原因を特定し、ファイルを修正して直してください。` +
-                  `テストやアサーションを削除・弱体化・スキップして通そうとしないこと（直すのはコード本体であり、評価基準ではありません）。`,
-              },
-            ];
-            finalAnswer = await runAgent(fixMsgs, agentCb, agentOpts);
-          }
+              }),
+            fix: async (fixPrompt) => {
+              const fixMsgs: ApiMessage[] = [
+                ...base,
+                { role: "assistant", content: finalAnswer },
+                { role: "user", content: fixPrompt },
+              ];
+              finalAnswer = await runAgent(fixMsgs, agentCb, agentOpts);
+            },
+            onCommandStart: (command) =>
+              appendItem({ kind: "tool", name: "run_command", args: { command }, status: "running" }),
+            onCommandEnd: (ok, log) => updateLastTool(ok ? "done" : "error", log),
+            report: (m) => appendItem({ kind: "assistant", content: m }),
+            aborted: () => signal.aborted,
+          });
         }
       } else {
         // Plain streaming chat (no tools).

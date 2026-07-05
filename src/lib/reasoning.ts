@@ -10,9 +10,18 @@
 // `samples` = breadth (independent angles), `depth` = verify/refine rounds.
 // See /specs/deep-reasoning-v2.md for the full design rationale.
 
+import { invoke } from "@tauri-apps/api/core";
 import { complete, type ApiMessage, type Usage } from "./openrouter";
 import { runAgent, type ToolStatus, type Todo, type ApprovalLevel } from "./agent";
-import { getEffortParams } from "./agentSettings";
+import {
+  getEffortParams,
+  getVerifyCommand,
+  getCommandTimeout,
+  getLoopMode,
+  MAX_VERIFY_ATTEMPTS,
+} from "./agentSettings";
+import { LOOP_MAX_ATTEMPTS } from "./loop";
+import { runVerifyLoop } from "./verifyLoop";
 
 export interface ReasoningCallbacks {
   /** Emitted for the draft and each reflection (thinking phases). */
@@ -52,6 +61,11 @@ export interface ReasoningOptions {
   /** Mixture-of-Agents (parallel proposer drafts + best-of-N final). Default on;
    * turn off to trade a little quality for speed/cost. */
   ensemble?: boolean;
+  /** Allow solve-level decomposition (frontier-roadmap P3): the brief may split
+   * the SOLUTION into 2-5 sub-tasks solved independently then composed. Only
+   * set for deep-routed runs; the brief itself decides whether the task
+   * actually decomposes ("S: none" keeps the normal draft path). */
+  decompose?: boolean;
   signal?: { aborted: boolean };
   /** Run id for backend cancellation; lets Stop abort in-flight API calls. */
   runId?: number;
@@ -86,7 +100,7 @@ const usr = (content: string): ApiMessage => ({ role: "user", content });
 // the task-specific success CRITERIA (so the pipeline can't drift away from what
 // was actually asked), then the investigation QUESTIONS. This brief anchors every
 // later phase and the verifier's rubric.
-const BRIEF = (n: number) =>
+const BRIEF = (n: number, decompose: boolean) =>
   usr(
     "Before any research, act as the lead architect and DESIGN how to answer THIS request well. " +
       "Output exactly these sections:\n" +
@@ -98,11 +112,36 @@ const BRIEF = (n: number) =>
       "CONSTRAINTS: hard limits the solution must respect — actions/files that must NOT be touched, " +
       "scope boundaries, irreversible operations to avoid, budget/time limits. Write 'none' if there " +
       "are genuinely none. One per line prefixed with '- '.\n" +
+      (decompose
+        ? "SUBTASKS: ONLY IF producing the solution itself naturally splits into 2-5 loosely-coupled " +
+          "sub-tasks (distinct modules/files/aspects that can be worked out independently), list them " +
+          'one per line prefixed with "S: ", in dependency order. If the task is small or indivisible, ' +
+          'write exactly "S: none". Do not force a split.\n'
+        : "") +
       (n > 1
         ? `QUESTIONS: at most ${n} independent, decision-relevant investigation questions whose ` +
           'answers are jointly sufficient to meet the GOAL. One per line, prefixed with "Q: ".'
         : "(Do not list questions for this run.)"),
   );
+
+// Solve ONE sub-task of the decomposed solution (frontier-roadmap P3): each
+// sub-problem individually sits inside a small model's competence even when
+// the composite task does not — that is what breaks the resampling ceiling.
+const SUBTASK_SOLVE = sys(
+  "You are solving ONE sub-task of a larger solution. Solve ONLY this sub-task, concretely and " +
+    "completely (code where applicable), grounded in the provided evidence" +
+    " — verify uncertain facts with the read-only tools before asserting them. " +
+    "Do NOT attempt the other sub-tasks. State any interface assumptions (names, types, contracts " +
+    "toward the other parts) explicitly at the end under 'INTERFACES:'.",
+);
+
+// Merge the independently-solved sub-tasks into one coherent solution.
+const COMPOSE = usr(
+  "Merge the sub-task solutions above into ONE coherent, complete solution to the user's task: " +
+    "resolve inconsistencies at the seams (naming, types, duplicated logic, mismatched interface " +
+    "assumptions), fill small gaps, and satisfy the GOAL/CRITERIA and every CONSTRAINT. " +
+    "Output ONLY the merged solution.",
+);
 
 // Coverage gate: is the gathered evidence enough to meet the brief, or are there gaps?
 const SUFFICIENCY = usr(
@@ -286,17 +325,24 @@ function parseJudgment(text: string): { score: number; defects: string[] } {
   return { score, defects: [raw || "（評価の解析に失敗。改善を継続）"] };
 }
 
-function parseBrief(
+export function parseBrief(
   text: string,
   maxQ: number,
-): { goal: string; criteria: string[]; constraints: string[]; questions: string[] } {
+): {
+  goal: string;
+  criteria: string[];
+  constraints: string[];
+  subtasks: string[];
+  questions: string[];
+} {
   // Tolerate header synonyms / language variants so a model that writes
   // "OBJECTIVE" or "成功基準" instead of GOAL/CRITERIA doesn't yield an empty brief.
   const G = "GOAL|OBJECTIVE|目標";
   const CR = "CRITERIA|成功基準|評価基準";
   const CO = "CONSTRAINTS|制約条件|制約";
+  const SU = "SUBTASKS|サブタスク";
   const QU = "QUESTIONS|質問";
-  const NEXT = `${G}|${CR}|${CO}|${QU}`;
+  const NEXT = `${G}|${CR}|${CO}|${SU}|${QU}`;
   const goalM = text.match(new RegExp(`(?:${G})[:：]\\s*([\\s\\S]*?)(?:\\n\\s*(?:${NEXT})\\b|$)`, "i"));
   const goal = goalM ? goalM[1].trim().replace(/\s*\n+\s*/g, " ") : "";
   const bullets = (section: string): string[] =>
@@ -305,13 +351,22 @@ function parseBrief(
       .map((l) => l.replace(/^\s*[-*•\d.)]+\s*/, "").trim())
       .filter((l) => l.length > 1)
       .slice(0, 8);
-  const critM = text.match(new RegExp(`(?:${CR})[:：]?\\s*([\\s\\S]*?)(?:\\n\\s*(?:${CO}|${QU})\\b|$)`, "i"));
+  const critM = text.match(new RegExp(`(?:${CR})[:：]?\\s*([\\s\\S]*?)(?:\\n\\s*(?:${CO}|${SU}|${QU})\\b|$)`, "i"));
   const criteria = critM ? bullets(critM[1]) : [];
-  const consM = text.match(new RegExp(`(?:${CO})[:：]?\\s*([\\s\\S]*?)(?:\\n\\s*(?:${QU})\\b|$)`, "i"));
+  const consM = text.match(new RegExp(`(?:${CO})[:：]?\\s*([\\s\\S]*?)(?:\\n\\s*(?:${SU}|${QU})\\b|$)`, "i"));
   const constraints = consM
     ? bullets(consM[1]).filter((c) => !/^none\b|^なし$/i.test(c))
     : [];
-  return { goal, criteria, constraints, questions: parseQuestions(text, maxQ) };
+  // Sub-tasks: "S: ..." lines; "S: none" (or なし) means the brief judged the
+  // task indivisible — the normal draft path is used then.
+  const subtasks = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => /^S[:：]/i.test(l))
+    .map((l) => l.replace(/^S[:：]\s*/i, "").trim())
+    .filter((s) => s.length > 1 && !/^none\b|^なし$/i.test(s))
+    .slice(0, 5);
+  return { goal, criteria, constraints, subtasks, questions: parseQuestions(text, maxQ) };
 }
 
 function parseSufficiency(text: string): { sufficient: boolean; gaps: string[] } {
@@ -469,7 +524,10 @@ export async function runRecurrentReasoning(
       opts.useTools
         ? think([...base, NEEDS_EXEC], thinking, { tools: false, tag: "classify" })
         : Promise.resolve(""),
-      think([...base, BRIEF(breadth)], synthesis, { tools: false, tag: "brief" }),
+      think([...base, BRIEF(breadth, opts.decompose === true)], synthesis, {
+        tools: false,
+        tag: "brief",
+      }),
     ]);
     if (aborted()) return;
     needsExec = opts.useTools && parseNeedsExec(verdict);
@@ -511,6 +569,8 @@ export async function runRecurrentReasoning(
       // weak executor sees a finished assistant answer and stops immediately ("done"
       // with no tool calls). `toolCount` tracks whether it actually did any work.
       let toolCount = 0;
+      // Files actually edited: gates the post-execution verify loop (P1).
+      let editedCount = 0;
       // Track the executor's own plan so we can tell whether it actually finished.
       // The fast executor model tends to stop early (narrate "done" with no tool
       // call) while planned steps are still pending — onIdle below refuses that stop.
@@ -530,7 +590,10 @@ export async function runRecurrentReasoning(
         onToolEnd: cb.onToolEnd,
         approve: cb.approve,
         onUsage: cb.onUsage,
-        onFileEdit: cb.onFileEdit,
+        onFileEdit: (path: string, prev: string | null) => {
+          editedCount++;
+          cb.onFileEdit?.(path, prev);
+        },
       };
       const execOpts = {
         approval: opts.approval,
@@ -571,6 +634,39 @@ export async function runRecurrentReasoning(
       const exMs = performance.now() - exStart;
       timings.push({ phase: "execute", ms: exMs, model: exModel || "(default)", tools: true });
       console.log(`[deepthink] execute · ${(exMs / 1000).toFixed(1)}s · ${exModel || "(default)"} · tools`);
+
+      // ── P1: execution-grounded verification (frontier-roadmap P1) ────────────
+      // If the executor edited files and a verify command is configured, run the
+      // same change→verify→fix loop as Agent mode. This upgrades deep-think's
+      // quality signal from "LLM-judge only" to ground truth (exit codes) — a
+      // signal that does not saturate at the judge's intelligence.
+      const verifyCmd = getVerifyCommand();
+      if (!aborted() && editedCount > 0 && verifyCmd) {
+        phaseTag = "verify-exec";
+        const vStart = performance.now();
+        const maxAttempts = getLoopMode() ? LOOP_MAX_ATTEMPTS : MAX_VERIFY_ATTEMPTS;
+        await runVerifyLoop(verifyCmd, maxAttempts, {
+          exec: (command) =>
+            invoke<{ stdout: string; stderr: string; code: number }>("run_command", {
+              command,
+              cwd: opts.workspaceRoot ?? null,
+              timeoutSecs: getCommandTimeout(),
+            }),
+          fix: async (fixPrompt) => {
+            await runAgent([...base, ...briefMsgs, planMsg, usr(fixPrompt)], execCb, execOpts);
+          },
+          onCommandStart: (command) => cb.onToolStart({ name: "run_command", args: { command } }),
+          onCommandEnd: (ok, log) => cb.onToolEnd(ok ? "done" : "error", log),
+          report: (m) => cb.onFinal(m),
+          aborted,
+        });
+        timings.push({
+          phase: "verify-exec",
+          ms: performance.now() - vStart,
+          model: exModel || "(default)",
+          tools: true,
+        });
+      }
       return;
     }
 
@@ -652,7 +748,37 @@ export async function runRecurrentReasoning(
     const draftInstr = evidence ? DRAFT_FROM_EVIDENCE : DRAFT_PLAIN;
     let draft: string;
     phaseTag = "draft";
-    if (ensemble) {
+    if (opts.decompose && brief.subtasks.length >= 2) {
+      // ── P3 — Solve-level decomposition (frontier-roadmap §P3) ────────────────
+      // The brief split the SOLUTION into loosely-coupled sub-tasks: solve each
+      // independently (cheap model, grounded, parallel) then have the strong
+      // model compose them. Each sub-problem sits inside the small model's
+      // competence even when the composite task does not — this is a capability
+      // lever, not a resampling one, so it is not subject to the +1-tier ceiling.
+      // MoA drafting is skipped here: decomposition replaces it as the source
+      // of diversity (running both would double the draft cost for overlap).
+      phaseTag = "subtask";
+      const n = brief.subtasks.length;
+      const parts = await Promise.all(
+        brief.subtasks.map(async (s, i) => {
+          const r = await think(
+            [...base, ...ctx, SUBTASK_SOLVE, usr(`Sub-task ${i + 1}/${n}: ${s}`)],
+            thinking,
+            { readOnly: true },
+          );
+          cb.onThought(`サブタスク解 ${i + 1}/${n}`, thinkingLabel, r);
+          return `### サブタスク ${i + 1}: ${s}\n${r}`;
+        }),
+      );
+      if (aborted()) return;
+      phaseTag = "compose";
+      draft = await think(
+        [...base, ...ctx, sys("以下は独立に解いたサブタスクの解です:\n\n" + parts.join("\n\n")), COMPOSE],
+        synthesis,
+        { tools: false },
+      );
+      cb.onThought("統合（COMPOSE）", synthLabel, draft);
+    } else if (ensemble) {
       // Mixture-of-Agents: several independent drafts (parallel, plain) → merge.
       const proposals = await Promise.all(
         Array.from({ length: ensembleSamples }, () =>

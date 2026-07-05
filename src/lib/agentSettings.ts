@@ -5,6 +5,7 @@ const TIMEOUT_KEY = "lokicode.commandTimeout";
 const VERIFY_KEY = "lokicode.verifyCommand";
 const RESTRICT_KEY = "lokicode.restrictToWorkspace";
 const EFFORT_KEY = "lokicode.effort";
+const LOOP_KEY = "lokicode.loopMode";
 
 /** Max times the agent re-runs the verify command and fixes failures. */
 export const MAX_VERIFY_ATTEMPTS = 2;
@@ -137,6 +138,17 @@ export const EFFORT_AGENT_GUIDANCE: Record<EffortLevel, string> = {
     "region; run the build/tests when cheap). Before finishing, check the result against each " +
     "stated requirement one by one and fix any miss.",
 };
+
+/** Loop-mode toggle (same key the ChatPane Toggle persists): raises the verify
+ * loop's attempt cap from MAX_VERIFY_ATTEMPTS to LOOP_MAX_ATTEMPTS. Read here
+ * so deep-think's execute phase (frontier-roadmap P1) sees the same setting. */
+export function getLoopMode(): boolean {
+  try {
+    return localStorage.getItem(LOOP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /** When on, the agent's file tools (read/write/list/grep) and run_command's cwd
  * are confined to the open workspace folder — a guard against a prompt-injected

@@ -134,6 +134,12 @@ export interface PipelineShape {
   draftPlain: number;
   finalLoop: number;
   finalPlain: number;
+  /** Solve-level decomposition (P3): sub-task solves (cheap tool loops). The
+   * count is data-dependent at runtime (the brief decides); the shape assumes
+   * the median width 3 when `decompose` is passed. */
+  subtask: number;
+  /** The strong-model composition of the sub-task solutions. */
+  compose: number;
 }
 
 export function pipelineShape(
@@ -144,6 +150,9 @@ export function pipelineShape(
   ensembleSamples = 2,
   /** Effort preset's parallel judge samples per verify round. */
   judgeSamples = 1,
+  /** Solve-level decomposition happened/expected (P3): sub-task solves replace
+   * the MoA draft. Runtime width is data-dependent; the shape assumes 3. */
+  decompose = false,
 ): PipelineShape {
   const breadth = Math.max(1, Math.min(5, Math.floor(samples)));
   const d = Math.max(0, Math.floor(depth));
@@ -153,6 +162,7 @@ export function pipelineShape(
   // Minimum grounding: an ensemble run with no investigation drafts tool-less,
   // so reasoning.ts inserts one read-only investigation of the GOAL first.
   const grounding = useTools && ensemble && breadth === 1 ? 1 : 0;
+  const K = 3; // assumed median sub-task width when decomposed
   return {
     classify: useTools ? 1 : 0,
     brief: 1,
@@ -160,10 +170,12 @@ export function pipelineShape(
     suff: breadth > 1 ? 1 : 0,
     judge: d * J,
     refine: d,
-    draftLoop: ensemble ? 0 : 1,
-    draftPlain: ensemble ? N + 1 : 0,
+    draftLoop: decompose ? 0 : ensemble ? 0 : 1,
+    draftPlain: decompose ? 0 : ensemble ? N + 1 : 0,
     finalLoop: ensemble ? 0 : 1,
     finalPlain: ensemble ? N + 1 : 0,
+    subtask: decompose ? K : 0,
+    compose: decompose ? 1 : 0,
   };
 }
 
@@ -176,11 +188,12 @@ export function structuralCalls(
   useTools: boolean,
   ensembleSamples = 2,
   judgeSamples = 1,
+  decompose = false,
 ): { loop: number; plain: number } {
-  const s = pipelineShape(depth, samples, useTools, ensembleSamples, judgeSamples);
+  const s = pipelineShape(depth, samples, useTools, ensembleSamples, judgeSamples, decompose);
   return {
-    loop: s.invest + s.refine + s.draftLoop + s.finalLoop,
-    plain: s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain,
+    loop: s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask,
+    plain: s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain + s.compose,
   };
 }
 
@@ -207,10 +220,10 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const synthPer = inTok * px(s.promptPrice) + synthOut * px(s.completionPrice);
 
   // Agent-loop phases carry the tool multiplier; plain completions do not.
-  const cheapLoop = sh.invest + sh.refine + sh.draftLoop;
+  const cheapLoop = sh.invest + sh.refine + sh.draftLoop + sh.subtask;
   const cheapPlain = sh.classify + sh.suff + sh.draftPlain;
   const strongLoop = sh.finalLoop;
-  const strongPlain = sh.brief + sh.finalPlain + sh.judge; // judge runs on the strong model
+  const strongPlain = sh.brief + sh.finalPlain + sh.judge + sh.compose; // judge/compose run on the strong model
   const usd =
     strongPlain * synthPer +
     strongLoop * synthPer * mult +

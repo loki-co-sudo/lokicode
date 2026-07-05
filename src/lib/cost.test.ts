@@ -78,7 +78,18 @@ describe("pipelineShape", () => {
       draftPlain: 0,
       finalLoop: 1, // single final is a tool loop
       finalPlain: 0,
+      subtask: 0,
+      compose: 0,
     });
+  });
+
+  it("solve-level decomposition replaces the draft with subtask solves + compose", () => {
+    const s = pipelineShape(3, 1, true, 2, 1, true);
+    expect(s.subtask).toBe(3); // assumed median width
+    expect(s.compose).toBe(1);
+    expect(s.draftLoop).toBe(0);
+    expect(s.draftPlain).toBe(0); // MoA draft skipped when decomposed
+    expect(s.finalPlain).toBe(3); // best-of-N final unchanged
   });
 
   it("depth>=3 turns draft/final into Mixture-of-Agents (plain), no loop draft/final", () => {
@@ -148,7 +159,16 @@ describe("structuralCalls", () => {
   it("matches the per-phase shape exactly (single source of truth)", () => {
     const s = pipelineShape(3, 3, true);
     const c = structuralCalls(3, 3, true);
-    expect(c.loop).toBe(s.invest + s.refine + s.draftLoop + s.finalLoop);
-    expect(c.plain).toBe(s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain);
+    expect(c.loop).toBe(s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask);
+    expect(c.plain).toBe(
+      s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain + s.compose,
+    );
+  });
+
+  it("counts subtask solves as loops and compose as a strong plain call", () => {
+    const c = structuralCalls(3, 1, true, 2, 1, true);
+    const s = pipelineShape(3, 1, true, 2, 1, true);
+    expect(c.loop).toBe(s.invest + s.refine + s.subtask);
+    expect(c.plain).toBe(s.classify + s.brief + s.judge + s.finalPlain + s.compose);
   });
 });
