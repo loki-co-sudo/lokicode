@@ -8,14 +8,14 @@
 
 | ファイル | 内容 | 状態 |
 | --- | --- | --- |
-| [frontier-roadmap.md](frontier-roadmap.md) | **今後の改善計画**（実行検証統合・リポマップ・解分解・証拠キャッシュ…優先順位と実装スケッチ） | 現行・未実装の計画 |
+| [frontier-roadmap.md](frontier-roadmap.md) | **改善計画の正本**（P1 実行検証統合✅・P2 リポマップ←次・P3 解分解✅・P4 証拠キャッシュ…） | 現行。P1/P3 は 1.6.0 実装済み・**次は P2** |
 | [deep-reasoning-v2.md](deep-reasoning-v2.md) | ディープシンクの基本構造（ブリーフ→調査→ドラフト→検証→合成）と v1→v2 の経緯 | 構造は現行。**固定定数の記述は旧**（エフォートに置換済み） |
 | [agent-v3.md](agent-v3.md) | 難易度ルーター・強い検証器・実行接地の設計 | 現行（ルーターは4分類に拡張済み、検証は最大5回のループモードに発展） |
 | [effort-presets.md](effort-presets.md) | 推論エフォート（速度/バランス/品質）と最小接地 | 現行（1.4/1.5 でパラメータ追加あり・表参照） |
 | [router-effort-link.md](router-effort-link.md) | ルーター4分類連動・judge多数決・beta卒業の根拠 | 現行 |
 | [model-gate.md](model-gate.md) | モデル要件ゲート（必要知能の判定基準） | 現行 |
 | [speed-and-level.md](speed-and-level.md) | フェーズ反復バジェット（実測45%短縮）・実効レベル推定式 | 現行 |
-| [loop-mode.md](loop-mode.md) | ループモード（変更→検証→修正・証拠つき完了・手詰まり停止） | 現行（ディープ実行フェーズへの適用は frontier-roadmap P1） |
+| [loop-mode.md](loop-mode.md) | ループモード（変更→検証→修正・証拠つき完了・手詰まり停止） | 現行（1.6.0 でディープ実行フェーズにも適用済み。共有実装は `lib/verifyLoop.ts`） |
 
 ## その他
 
