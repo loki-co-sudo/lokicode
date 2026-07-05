@@ -23,6 +23,7 @@ import {
   COMMAND_TIMEOUT_RANGE,
   MAX_VERIFY_ATTEMPTS,
 } from "../lib/agentSettings";
+import { defectMemorySize, clearDefectMemory } from "../lib/defectMemory";
 import ModelPicker from "./ModelPicker";
 import GithubAccount from "./GithubAccount";
 
@@ -72,6 +73,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
   const [commandTimeout, setCmdTimeout] = useState(() => getCommandTimeout());
   const [verifyCommand, setVerifyCmd] = useState(() => getVerifyCommand());
   const [restrictWorkspace, setRestrictWs] = useState(() => getRestrictToWorkspace());
+  const [defectCount, setDefectCount] = useState(() => defectMemorySize());
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -80,6 +82,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
     setCmdTimeout(getCommandTimeout());
     setVerifyCmd(getVerifyCommand());
     setRestrictWs(getRestrictToWorkspace());
+    setDefectCount(defectMemorySize());
     getSettings().then((s) => {
       setStatus(s);
       setModel(s.model);
@@ -283,6 +286,30 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
             placeholder="例: npm run build / npm test（空欄で無効）"
             className="w-full rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-neutral-100 outline-none focus:border-blue-500"
           />
+
+          <div className="mb-1 mt-3 flex items-center justify-between gap-2">
+            <label className="text-[11px] text-neutral-400">
+              ディープシンクの欠陥メモリ（{defectCount} パターン記憶中）
+            </label>
+            <Help
+              text={
+                <>
+                  ディープシンクの検証器が繰り返し指摘した<b className="text-neutral-300">失敗パターン</b>（例: 根拠のない数値の捏造、対象読者のズレ）を蓄積し、次回以降のドラフト生成に「避けること」として自動で注入します（<b className="text-neutral-300">経験でプロンプトが強くなる</b>）。2回以上出たパターンのみ・上位数件に限定。ここでリセットできます。
+                </>
+              }
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              clearDefectMemory();
+              setDefectCount(0);
+            }}
+            disabled={defectCount === 0}
+            className="mb-1 rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
+          >
+            欠陥メモリをクリア
+          </button>
 
           <div className="mt-3 flex items-start justify-between gap-2">
             <label className="flex items-center gap-2 text-[11px] text-neutral-300">

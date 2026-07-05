@@ -23,6 +23,7 @@ import {
 import { LOOP_MAX_ATTEMPTS } from "./loop";
 import { runVerifyLoop } from "./verifyLoop";
 import { buildRepoMap } from "./repoMap";
+import { recordDefects, defectReminder } from "./defectMemory";
 
 export interface ReasoningCallbacks {
   /** Emitted for the draft and each reflection (thinking phases). */
@@ -436,6 +437,12 @@ export async function runRecurrentReasoning(
   let ensemble =
     (opts.ensemble ?? true) && effort.ensembleSamples > 1 && (breadth > 1 || depth >= 3);
   const ensembleSamples = effort.ensembleSamples;
+  // Defect memory (P5): recurring past-defect patterns, pre-warned to the
+  // GENERATION phases (draft / sub-task / final) only — never the judge, so the
+  // critic stays unbiased. Built once from prior runs; this run's defects are
+  // recorded (deduped) after the verify loop to help FUTURE runs.
+  const reminder = defectReminder();
+  const defectMsgs: ApiMessage[] = reminder ? [sys(reminder)] : [];
 
   // ── Timing instrumentation (visible in the F12 console as `[deepthink]`) ─────
   // Each LLM round-trip is timed and tagged with its phase so the bottleneck is
@@ -784,6 +791,10 @@ export async function runRecurrentReasoning(
       ? [sys(`収集された調査結果（根拠。以後の判断はこれを優先）:\n\n${evidence}`)]
       : [];
     const ctx = [...briefMsgs, ...evidenceMsgs];
+    // genCtx adds the P5 defect reminder — used by GENERATION calls only (draft
+    // variants, sub-task solve, final variants). The judge and refine use the
+    // plain `ctx` so the critic is never primed with an "avoid" list.
+    const genCtx = [...ctx, ...defectMsgs];
     const draftInstr = evidence ? DRAFT_FROM_EVIDENCE : DRAFT_PLAIN;
     let draft: string;
     phaseTag = "draft";
@@ -803,7 +814,7 @@ export async function runRecurrentReasoning(
           const r = await think(
             // The repo map (P2) is wired here too: sub-task solvers explore
             // with read-only tools exactly like investigators do.
-            [...base, ...ctx, ...repoMapMsgs, SUBTASK_SOLVE, usr(`Sub-task ${i + 1}/${n}: ${s}`)],
+            [...base, ...genCtx, ...repoMapMsgs, SUBTASK_SOLVE, usr(`Sub-task ${i + 1}/${n}: ${s}`)],
             thinking,
             { readOnly: true },
           );
@@ -823,7 +834,7 @@ export async function runRecurrentReasoning(
       // Mixture-of-Agents: several independent drafts (parallel, plain) → merge.
       const proposals = await Promise.all(
         Array.from({ length: ensembleSamples }, () =>
-          think([...base, ...ctx, draftInstr], thinking, { tools: false }),
+          think([...base, ...genCtx, draftInstr], thinking, { tools: false }),
         ),
       );
       if (aborted()) return;
@@ -842,7 +853,7 @@ export async function runRecurrentReasoning(
       draft = await think(merged, thinking, { tools: false });
       cb.onThought("ドラフト統合（MoA）", thinkingLabel, draft);
     } else {
-      draft = await think([...base, ...ctx, draftInstr], thinking, { readOnly: true });
+      draft = await think([...base, ...genCtx, draftInstr], thinking, { readOnly: true });
       cb.onThought(evidence ? "統合ドラフト" : "初期ドラフト", thinkingLabel, draft);
     }
     if (aborted()) return;
@@ -852,6 +863,10 @@ export async function runRecurrentReasoning(
     // we stop early once it passes (real signal, not a self-claim), and escalate
     // refinement to the strong model when the cheap model is stuck on a low score.
     phaseTag = "verify";
+    // Accumulate this run's distinct defects; record ONCE after the loop so a
+    // stubborn defect repeated across refine rounds counts as +1 for the run
+    // (the memory models patterns recurring ACROSS runs, not within one).
+    const runDefects = new Set<string>();
     for (let k = 1; k <= depth; k++) {
       if (aborted()) return;
       // Strong verifier: the critic runs on the synthesis (strong) model so the
@@ -870,6 +885,7 @@ export async function runRecurrentReasoning(
       const parsed = verdicts.map(parseJudgment);
       const score = Math.min(...parsed.map((p) => p.score));
       const defects = [...new Set(parsed.flatMap((p) => p.defects))];
+      defects.forEach((d) => runDefects.add(d));
       cb.onThought(
         `検証 ${k}/${depth}（スコア ${score}）`,
         synthLabel,
@@ -894,6 +910,8 @@ export async function runRecurrentReasoning(
       );
     }
     if (aborted()) return;
+    // Persist this run's defect patterns for future runs (P5). Best-effort.
+    recordDefects([...runDefects]);
 
     // ── Phase E — Final (strong model). On non-trivial tasks: best-of-N with the
     // strong model selecting/merging the best candidate (verifier selection). ────
@@ -902,7 +920,7 @@ export async function runRecurrentReasoning(
     if (ensemble) {
       const candidates = await Promise.all(
         Array.from({ length: ensembleSamples }, () =>
-          think([...base, ...ctx, { role: "assistant", content: draft }, FINAL(false)], synthesis, {
+          think([...base, ...genCtx, { role: "assistant", content: draft }, FINAL(false)], synthesis, {
             tools: false,
           }),
         ),
@@ -926,7 +944,7 @@ export async function runRecurrentReasoning(
       );
     } else {
       final = await think(
-        [...base, ...ctx, { role: "assistant", content: draft }, FINAL(opts.useTools)],
+        [...base, ...genCtx, { role: "assistant", content: draft }, FINAL(opts.useTools)],
         synthesis,
         { readOnly: true },
       );
