@@ -498,6 +498,10 @@ export async function runRecurrentReasoning(
           // while an uncapped loop wanders one-read-per-turn with ballooning
           // context. The execute fast path is NOT routed through think().
           maxIterations: effort.phaseIterations,
+          // On cap, force one no-tools turn so the phase still emits its
+          // structured output (otherwise the limit message leaks downstream
+          // as if it were evidence — observed poisoning a whole run).
+          finalizeOnCap: true,
         },
       );
     } else {
@@ -708,7 +712,9 @@ export async function runRecurrentReasoning(
           usr(`Sub-question: ${q}`),
         ],
         thinking,
-        { readOnly: true },
+        // Explicit tag: gap-fill investigations are launched while phaseTag is
+        // "sufficiency", which mislabeled their timings before.
+        { readOnly: true, tag: "investigate" },
       );
       cb.onThought(label, thinkingLabel, r);
       return `### 調査: ${q}\n${r}`;
@@ -795,7 +801,9 @@ export async function runRecurrentReasoning(
       const parts = await Promise.all(
         brief.subtasks.map(async (s, i) => {
           const r = await think(
-            [...base, ...ctx, SUBTASK_SOLVE, usr(`Sub-task ${i + 1}/${n}: ${s}`)],
+            // The repo map (P2) is wired here too: sub-task solvers explore
+            // with read-only tools exactly like investigators do.
+            [...base, ...ctx, ...repoMapMsgs, SUBTASK_SOLVE, usr(`Sub-task ${i + 1}/${n}: ${s}`)],
             thinking,
             { readOnly: true },
           );

@@ -91,4 +91,19 @@ describe("formatRepoMap", () => {
   it("returns empty string for no matches", () => {
     expect(formatRepoMap([])).toBe("");
   });
+
+  it("excludes non-code files (markdown code fences must not pollute the map)", () => {
+    const out = formatRepoMap([
+      { path: "specs/design.md", line: 10, text: "export function example() {" },
+      { path: "README.md", line: 5, text: "class Sample {" },
+      { path: "notes.txt", line: 1, text: "def helper():" },
+      { path: "src/real.ts", line: 2, text: "export function real() {" },
+      { path: "src-tauri/src/lib.rs", line: 7, text: "pub fn run() {" },
+    ]);
+    expect(out).not.toContain("design.md");
+    expect(out).not.toContain("README.md");
+    expect(out).not.toContain("notes.txt");
+    expect(out).toContain("src/real.ts");
+    expect(out).toContain("src-tauri/src/lib.rs");
+  });
 });

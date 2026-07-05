@@ -31,6 +31,13 @@ export const SYMBOL_PATTERN =
   "(?:export\\s+)?(?:const|let)\\s+[A-Za-z_$][\\w$]*\\s*=\\s*(?:async\\s+)?(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*=>" +
   ")";
 
+/** Only code files belong in the map. Without this filter, definition-shaped
+ * lines inside markdown code fences (specs/READMEs), snapshots or other text
+ * files pollute the map — wasting budget and pointing the model at doc
+ * snippets as if they were code locations. */
+export const CODE_FILE =
+  /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|rs|py|go|java|kt|cs|c|h|cc|cpp|hpp|rb|php|swift|scala|vue|svelte)$/i;
+
 /** Tidy a raw signature line for the map: collapse whitespace, drop a trailing
  * opening brace, cap length. */
 function cleanSignature(text: string): string {
@@ -54,6 +61,7 @@ export function formatRepoMap(
 ): string {
   const byFile = new Map<string, { line: number; text: string }[]>();
   for (const m of matches) {
+    if (!CODE_FILE.test(m.path)) continue;
     const arr = byFile.get(m.path) ?? [];
     if (arr.length < perFileCap) arr.push({ line: m.line, text: cleanSignature(m.text) });
     byFile.set(m.path, arr);

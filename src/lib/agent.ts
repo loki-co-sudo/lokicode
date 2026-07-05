@@ -439,6 +439,13 @@ export interface AgentOptions {
    * saturates after a handful of reads — without a cap a small model wanders
    * one-read-per-turn for dozens of rounds (latency + ballooning context). */
   maxIterations?: number;
+  /** When the iteration cap is hit, run ONE final NO-TOOLS turn asking the
+   * model to write its structured output from what it has gathered, instead of
+   * returning the generic limit message. Without this, a capped investigation
+   * leaks "（ツール実行が上限に達したため停止）" downstream as if it were
+   * evidence — observed in the 1.7.x e2e run, where it poisoned the draft and
+   * the final answer. Deep-think's read-only phases set this. */
+  finalizeOnCap?: boolean;
   /** Offer the ask_user tool (interactive top-level agent only). */
   allowAskUser?: boolean;
   /** Run id for backend cancellation; lets Stop abort an in-flight API call. */
@@ -622,6 +629,31 @@ export async function runAgent(
 
       cb.onToolEnd(status, result);
       conv.push({ role: "tool", tool_call_id: call.id, content: result });
+    }
+  }
+
+  // Iteration cap reached. For reasoning phases (finalizeOnCap) force one
+  // final no-tools turn so the run still yields its structured output — honest
+  // partial findings beat a generic limit message masquerading as evidence.
+  if (opts.finalizeOnCap && !opts.signal?.aborted) {
+    conv.push({
+      role: "user",
+      content:
+        "ツールの実行回数が上限に達しました。これ以上ツールは使えません。" +
+        "ここまでに得た情報だけで、指示された出力形式に従って最終出力を書いてください。" +
+        "確認できた事実（file:line つき）と、確認できなかったこと（UNKNOWN）を正直に分けること。" +
+        "推測を確認済みのように書いてはいけません。",
+    });
+    try {
+      const { message, usage } = await chatOnceStream(conv, [], opts.model, () => {}, opts.cancelId);
+      cb.onUsage?.(usage);
+      if (message.content) {
+        console.log(`[${trace}] cap reached — finalized without tools (${message.content.length}c)`);
+        cb.onAssistantText(message.content);
+        return message.content;
+      }
+    } catch {
+      /* fall through to the limit message */
     }
   }
 
