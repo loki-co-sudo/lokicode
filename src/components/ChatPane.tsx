@@ -931,6 +931,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             synthesisModel: synthesisModel || undefined,
             useTools: useAgent,
             approval,
+            workspaceRoot: workspaceRoot ?? undefined,
             ensemble: effEnsemble,
             signal,
             runId,

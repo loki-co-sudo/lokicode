@@ -46,6 +46,9 @@ export interface ReasoningOptions {
   useTools: boolean;
   /** Approval policy for risky tools (passed through to the agent). */
   approval: ApprovalLevel;
+  /** Workspace root, passed through to the agent phases so grep_search's
+   * default root and run_command's default cwd work inside deep-think. */
+  workspaceRoot?: string;
   /** Mixture-of-Agents (parallel proposer drafts + best-of-N final). Default on;
    * turn off to trade a little quality for speed/cost. */
   ensemble?: boolean;
@@ -170,8 +173,24 @@ const NEEDS_EXEC = usr(
   "Does fully completing the user's request require making real changes to the system — " +
     "creating/editing/deleting files, running commands, or git add/commit/push (i.e. side " +
     "effects beyond producing an answer)? Consider what 'done' means for THIS request. " +
-    "Reply with exactly YES or NO.",
+    "Requests that only ask to explain, analyze, organize, summarize or investigate " +
+    "(説明・分析・整理・要約・調査) are NO, even when they mention files — reading files " +
+    "to answer is not a system change. " +
+    "Reply with exactly one word: YES or NO. No other text.",
 );
+
+/** Parse the NEEDS_EXEC verdict. Weak models sometimes ramble despite the
+ * "one word" instruction, so a naive substring test can catch a stray "yes"
+ * inside the reasoning (observed with deepseek-v4-flash in the e2e run and it
+ * wrongly sent an analysis question down the execute path). Take the LAST
+ * yes/no-like token — models conclude at the end — and default to NO (the
+ * read-only analysis path is the safe side). Exported for unit tests. */
+export function parseNeedsExec(text: string): boolean {
+  const matches = text.match(/\b(?:yes|no)\b|はい|いいえ/gi);
+  if (!matches || matches.length === 0) return false;
+  const last = matches[matches.length - 1].toLowerCase();
+  return last === "yes" || last === "はい";
+}
 
 // Execution phase instruction: hand the plan to a real tool-using agent.
 const EXECUTE = usr(
@@ -410,6 +429,7 @@ export async function runRecurrentReasoning(
         {
           approval: opts.approval,
           model,
+          workspaceRoot: opts.workspaceRoot,
           signal: opts.signal,
           readOnly: o.readOnly,
           cancelId: opts.runId,
@@ -441,7 +461,7 @@ export async function runRecurrentReasoning(
       logSummary();
       return;
     }
-    needsExec = /\b(yes|true)\b|はい/i.test(verdict.trim());
+    needsExec = parseNeedsExec(verdict);
   }
 
   try {
@@ -511,6 +531,7 @@ export async function runRecurrentReasoning(
       const execOpts = {
         approval: opts.approval,
         model: exModel,
+        workspaceRoot: opts.workspaceRoot,
         signal: opts.signal,
         readOnly: false,
         cancelId: opts.runId,
