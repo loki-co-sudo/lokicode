@@ -24,6 +24,30 @@ import { LOOP_MAX_ATTEMPTS } from "./loop";
 import { runVerifyLoop } from "./verifyLoop";
 import { buildRepoMap } from "./repoMap";
 import { recordDefects, defectReminder } from "./defectMemory";
+import { taskKeyFor, buildCachedFactsMessage, recordVerifiedFacts } from "./evidenceCache";
+
+/** Extract the current user question from the base messages (last user turn),
+ * for scoping the evidence cache (P4) to this task. */
+function lastUserQuestion(base: ApiMessage[]): string {
+  for (let i = base.length - 1; i >= 0; i--) {
+    if (base[i].role === "user" && base[i].content) return String(base[i].content);
+  }
+  return "";
+}
+
+/** Resolve a cited path (absolute or repo-relative) and read it, returning null
+ * when unreadable/missing — used by the evidence cache to hash cited files. */
+function makeCitedFileReader(workspaceRoot: string | undefined) {
+  const isAbsolute = (p: string) => /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]/.test(p);
+  return async (path: string): Promise<string | null> => {
+    const abs = isAbsolute(path) || !workspaceRoot ? path : `${workspaceRoot}/${path}`;
+    try {
+      return await invoke<string>("read_text_file", { path: abs });
+    } catch {
+      return null;
+    }
+  };
+}
 
 export interface ReasoningCallbacks {
   /** Emitted for the draft and each reflection (thinking phases). */
@@ -547,6 +571,23 @@ export async function runRecurrentReasoning(
     }
   }
 
+  // ── Verified-evidence cache (frontier-roadmap P4) ────────────────────────────
+  // Facts VERIFIED in prior runs of THIS question are re-injected only if every
+  // cited file's content hash still matches (a changed file drops its facts). So
+  // the second run starts already knowing things — accumulation, never an answer
+  // cache. Injected into investigation (skip re-discovery) and the shared ctx
+  // (usable as evidence by draft/judge/final, since these are hash-valid facts).
+  const taskKey = taskKeyFor(lastUserQuestion(base));
+  const readCitedFile = makeCitedFileReader(opts.workspaceRoot);
+  let cachedFactsMsgs: ApiMessage[] = [];
+  if (opts.useTools && opts.workspaceRoot) {
+    const cached = await buildCachedFactsMessage(taskKey, readCitedFile);
+    if (cached) {
+      cachedFactsMsgs = [sys(cached)];
+      console.log(`[deepthink] evidence-cache · ${cached.length}c injected`);
+    }
+  }
+
   // ── Phase 0 ∥ Phase A — exec classification and the solution brief ──────────
   // The NEEDS_EXEC verdict (does this task require side effects?) and the
   // strong-model brief are independent, so they run in PARALLEL: total latency
@@ -715,6 +756,7 @@ export async function runRecurrentReasoning(
           ...base,
           ...briefMsgs,
           ...repoMapMsgs,
+          ...cachedFactsMsgs,
           INVESTIGATOR(effort.phaseIterations),
           usr(`Sub-question: ${q}`),
         ],
@@ -782,6 +824,13 @@ export async function runRecurrentReasoning(
       evidence = joinEvidence([grounding]);
     }
 
+    // Record this run's VERIFIED facts (hashing their cited files now) for reuse
+    // by future runs of the same question (P4). Fire-and-forget; failures are
+    // swallowed inside the module (best-effort accumulation).
+    if (evidence && opts.useTools && opts.workspaceRoot) {
+      void recordVerifiedFacts(taskKey, [evidence], readCitedFile);
+    }
+
     // ── Phase C — Draft against the brief, grounded in the evidence ─────────────
     // Cost routing: the draft is the most expensive single generation, so it runs
     // on the CHEAP thinking model. The strong model is reserved for the final
@@ -790,7 +839,10 @@ export async function runRecurrentReasoning(
     const evidenceMsgs: ApiMessage[] = evidence
       ? [sys(`収集された調査結果（根拠。以後の判断はこれを優先）:\n\n${evidence}`)]
       : [];
-    const ctx = [...briefMsgs, ...evidenceMsgs];
+    // Cached facts (P4) join this run's own evidence in `ctx` — they are
+    // hash-validated current-codebase facts, so it is correct for the judge to
+    // treat them as evidence (unlike the P5 defect reminder, which is meta).
+    const ctx = [...briefMsgs, ...cachedFactsMsgs, ...evidenceMsgs];
     // genCtx adds the P5 defect reminder — used by GENERATION calls only (draft
     // variants, sub-task solve, final variants). The judge and refine use the
     // plain `ctx` so the critic is never primed with an "avoid" list.

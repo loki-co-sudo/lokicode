@@ -24,6 +24,7 @@ import {
   MAX_VERIFY_ATTEMPTS,
 } from "../lib/agentSettings";
 import { defectMemorySize, clearDefectMemory } from "../lib/defectMemory";
+import { evidenceCacheSize, clearEvidenceCache } from "../lib/evidenceCache";
 import ModelPicker from "./ModelPicker";
 import GithubAccount from "./GithubAccount";
 
@@ -74,6 +75,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
   const [verifyCommand, setVerifyCmd] = useState(() => getVerifyCommand());
   const [restrictWorkspace, setRestrictWs] = useState(() => getRestrictToWorkspace());
   const [defectCount, setDefectCount] = useState(() => defectMemorySize());
+  const [evidenceCount, setEvidenceCount] = useState(() => evidenceCacheSize());
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -83,6 +85,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
     setVerifyCmd(getVerifyCommand());
     setRestrictWs(getRestrictToWorkspace());
     setDefectCount(defectMemorySize());
+    setEvidenceCount(evidenceCacheSize());
     getSettings().then((s) => {
       setStatus(s);
       setModel(s.model);
@@ -309,6 +312,30 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
             className="mb-1 rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
           >
             欠陥メモリをクリア
+          </button>
+
+          <div className="mb-1 mt-3 flex items-center justify-between gap-2">
+            <label className="text-[11px] text-neutral-400">
+              ディープシンクの証拠キャッシュ（{evidenceCount} 事実を記憶中）
+            </label>
+            <Help
+              text={
+                <>
+                  ディープシンクの調査で確認した<b className="text-neutral-300">検証済みの事実</b>（file:line 付き）を、引用ファイルの<b className="text-neutral-300">内容ハッシュ</b>とともに保存し、<b className="text-neutral-300">同じ質問の次回以降</b>に再注入します（毎回ゼロから読み直さない＝蓄積による高速化）。<b className="text-neutral-300">ファイルが変わればハッシュ不一致で自動的に破棄</b>されるため、古い事実が混入しません。回答そのものはキャッシュしません。ここでリセットできます。
+                </>
+              }
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              clearEvidenceCache();
+              setEvidenceCount(0);
+            }}
+            disabled={evidenceCount === 0}
+            className="mb-1 rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
+          >
+            証拠キャッシュをクリア
           </button>
 
           <div className="mt-3 flex items-start justify-between gap-2">
