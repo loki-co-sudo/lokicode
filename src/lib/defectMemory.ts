@@ -33,8 +33,11 @@ export type DefectStore = Record<string, DefectRecord>;
  * strings too short to be a useful pattern. Pure.
  */
 export function normalizeDefect(s: string): string {
+  // NOTE: the quote class deliberately EXCLUDES the plain apostrophe (') —
+  // English contractions ("doesn't", "user's") would otherwise delete the whole
+  // span between two apostrophes and falsely merge distinct defects.
   const norm = s
-    .replace(/[`'"“”『』「」][^`'"“”『』「」]*[`'"“”『』「」]/g, "_") // quoted spans
+    .replace(/[`"“”『』「」][^`"“”『』「」]*[`"“”『』「」]/g, "_") // quoted spans
     .replace(/[\w./\\-]*[/\\][\w./\\-]+/g, "_") // path-like tokens
     .replace(/\d+/g, "#") // numbers
     .replace(/\s+/g, " ")
@@ -87,8 +90,10 @@ export function topFrom(
 export function formatDefectReminder(records: DefectRecord[]): string {
   if (records.length === 0) return "";
   return (
-    "過去のディープシンクで繰り返し指摘された失敗パターン（今回の回答ではこれらを避けること）:\n" +
-    records.map((r) => `- ${r.text}`).join("\n")
+    "過去のディープシンクで繰り返し指摘された失敗パターン（今回の回答ではこの種の失敗を避けること）:\n" +
+    records.map((r) => `- ${r.text}`).join("\n") +
+    "\n注意: 上記は過去の別タスクでの指摘の例文です。文中の具体的なファイル名・数値・固有名詞を" +
+    "今回のタスクの事実として扱わず、失敗の型（無根拠な主張・読者のズレ等）として読み替えること。"
   );
 }
 

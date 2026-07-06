@@ -42,6 +42,15 @@ describe("normalizeDefect", () => {
     );
   });
 
+  it("does not treat English apostrophes as quote spans (no span deletion)", () => {
+    // With ' in the quote class, everything between the two apostrophes would be
+    // deleted and these two distinct defects would falsely merge.
+    const a = normalizeDefect("the draft doesn't address caching and the user's goal");
+    const b = normalizeDefect("the draft doesn't address routing and the user's goal");
+    expect(a).not.toBe(b);
+    expect(a).toContain("caching");
+  });
+
   it("returns empty for too-short strings", () => {
     expect(normalizeDefect("no")).toBe("");
     expect(normalizeDefect("  x  ")).toBe("");
@@ -64,18 +73,31 @@ describe("recordInto", () => {
     expect(Object.keys(recordInto({}, ["no", ""], 1))).toHaveLength(0);
   });
 
-  it("evicts lowest-count patterns beyond MAX_ENTRIES", () => {
+  it("evicts lowest-count patterns beyond MAX_ENTRIES (eviction must actually fire)", () => {
+    // Letters-only suffixes: digits normalize to '#', which would collapse
+    // every entry into ONE key and never trigger eviction (the original
+    // version of this test passed without exercising the eviction path).
+    const suffix = (i: number) =>
+      String.fromCharCode(97 + Math.floor(i / 26)) + String.fromCharCode(97 + (i % 26)) + "xxx";
     let s: DefectStore = {};
-    // Fill past the cap with distinct one-off patterns...
-    for (let i = 0; i < MAX_ENTRIES + 10; i++) s = recordInto(s, [`distinct defect pattern number alpha ${i}`], i);
-    expect(Object.keys(s).length).toBeLessThanOrEqual(MAX_ENTRIES);
-    // A high-count pattern must survive eviction.
-    s = recordInto(s, ["surviving frequent defect pattern"], 1000);
-    s = recordInto(s, ["surviving frequent defect pattern here"], 1001); // different (has 'here')
-    s = recordInto(s, ["surviving frequent defect pattern"], 1002);
-    for (let i = 0; i < 50; i++) s = recordInto(s, [`another throwaway defect ${i}`], 2000 + i);
-    const survivor = Object.values(s).find((r) => r.text.startsWith("surviving frequent defect pattern") && r.count >= 2);
+    // A high-count pattern recorded early (oldest ts) must survive on count.
+    s = recordInto(s, ["surviving frequent defect pattern"], 1);
+    s = recordInto(s, ["surviving frequent defect pattern"], 2);
+    s = recordInto(s, ["surviving frequent defect pattern"], 3);
+    // Fill past the cap with genuinely distinct one-off patterns.
+    for (let i = 0; i < MAX_ENTRIES + 20; i++) {
+      s = recordInto(s, [`distinct throwaway defect pattern ${suffix(i)}`], 100 + i);
+    }
+    // Precondition: the fill really produced distinct keys (guards against the
+    // normalization collapsing them and making this test vacuous again).
+    const size = Object.keys(s).length;
+    expect(size).toBe(MAX_ENTRIES); // cap enforced…
+    // …and eviction actually fired: 1 survivor + (MAX+20) one-offs > MAX.
+    const oneOffs = Object.values(s).filter((r) => r.count === 1).length;
+    expect(oneOffs).toBe(MAX_ENTRIES - 1); // some one-offs were dropped
+    const survivor = Object.values(s).find((r) => r.text === "surviving frequent defect pattern");
     expect(survivor).toBeTruthy();
+    expect(survivor!.count).toBe(3);
   });
 });
 
