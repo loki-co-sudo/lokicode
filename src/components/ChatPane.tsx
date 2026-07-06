@@ -906,6 +906,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     let effDepth = depth;
     let effSamples = samples;
     let effEnsemble = ensemble;
+    // Defect-guided beam search (P6) is gated to router-classified deep-hard.
+    let routeDeepHard = false;
     if (autoRoute) {
       const route = await classifyTask(text, model || undefined);
       const routeLabel =
@@ -931,6 +933,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         effDepth = Math.max(depth, 5);
         effSamples = Math.max(samples, 3);
         effEnsemble = true;
+        routeDeepHard = true;
       }
     }
 
@@ -949,6 +952,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             // Solve-level decomposition (P3): allowed on deep-routed runs; the
             // brief itself decides whether the task actually decomposes.
             decompose: true,
+            // Defect-guided beam (P6): only router-classified deep-hard; further
+            // gated to the quality effort preset inside the pipeline.
+            beamSearch: routeDeepHard,
             ensemble: effEnsemble,
             signal,
             runId,

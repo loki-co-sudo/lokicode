@@ -15,6 +15,7 @@ import { complete, type ApiMessage, type Usage } from "./openrouter";
 import { runAgent, type ToolStatus, type Todo, type ApprovalLevel } from "./agent";
 import {
   getEffortParams,
+  getEffort,
   getVerifyCommand,
   getCommandTimeout,
   getLoopMode,
@@ -25,6 +26,7 @@ import { runVerifyLoop } from "./verifyLoop";
 import { buildRepoMap } from "./repoMap";
 import { recordDefects, defectReminder } from "./defectMemory";
 import { taskKeyFor, buildCachedFactsMessage, recordVerifiedFacts } from "./evidenceCache";
+import { recordModelRun } from "./modelLedger";
 
 /** Extract the current user question from the base messages (last user turn),
  * for scoping the evidence cache (P4) to this task. */
@@ -92,6 +94,11 @@ export interface ReasoningOptions {
    * set for deep-routed runs; the brief itself decides whether the task
    * actually decomposes ("S: none" keeps the normal draft path). */
   decompose?: boolean;
+  /** Defect-guided beam search (frontier-roadmap P6): on a hard task that keeps
+   * scoring low, branch the refine into a few candidates and keep the best.
+   * Set only for router-classified deep-hard runs; further gated to the quality
+   * effort preset and fired at most once per run (cost control). */
+  beamSearch?: boolean;
   signal?: { aborted: boolean };
   /** Run id for backend cancellation; lets Stop abort in-flight API calls. */
   runId?: number;
@@ -99,6 +106,16 @@ export interface ReasoningOptions {
 
 export const MAX_DEPTH = 16;
 export const MAX_SAMPLES = 5;
+/** Beam width for P6 defect-guided branching (parallel refine candidates). Kept
+ * at 2: the 1→2 diversity gain is the largest, 3+ mostly adds cost. */
+export const BEAM_WIDTH = 2;
+
+/** Pick the index of the highest-scoring branch (ties → earliest). Pure. */
+export function pickBestBranch(scores: number[]): number {
+  let best = 0;
+  for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
+  return best;
+}
 
 const MAX_EVIDENCE_CHARS = 9000;
 /** Fallback verifier pass mark when no effort preset applies (parse fallback). */
@@ -452,6 +469,15 @@ export async function runRecurrentReasoning(
   let breadth = clampBreadth(opts.samples ?? 1);
   const thinkingLabel = thinking || "(default)";
   const synthLabel = synthesis || thinkingLabel;
+  // P7 ledger: accumulate this run's cost and remember its final judge score so
+  // we can record quality×cost for the thinking model at the end (data only —
+  // the bandit selection is not wired yet). trackUsage wraps cb.onUsage.
+  let runCostUsd = 0;
+  let lastVerifyScore = -1;
+  const trackUsage = (u: Usage) => {
+    runCostUsd += u.cost;
+    cb.onUsage?.(u);
+  };
   const aborted = () => opts.signal?.aborted === true;
   // Effort preset (speed/balanced/quality): the user's one-knob cost/speed vs
   // accuracy dial. Read once per run so a mid-run settings change can't skew it.
@@ -514,7 +540,7 @@ export async function runRecurrentReasoning(
           onToolStart: cb.onToolStart,
           onToolEnd: cb.onToolEnd,
           approve: cb.approve,
-          onUsage: cb.onUsage,
+          onUsage: trackUsage,
           onFileEdit: cb.onFileEdit,
         },
         {
@@ -537,7 +563,7 @@ export async function runRecurrentReasoning(
       );
     } else {
       const { content, usage } = await complete(messages, model, opts.runId);
-      cb.onUsage?.(usage);
+      trackUsage(usage);
       result = content;
     }
     const ms = performance.now() - start;
@@ -665,7 +691,7 @@ export async function runRecurrentReasoning(
         },
         onToolEnd: cb.onToolEnd,
         approve: cb.approve,
-        onUsage: cb.onUsage,
+        onUsage: trackUsage,
         onFileEdit: (path: string, prev: string | null) => {
           editedCount++;
           cb.onFileEdit?.(path, prev);
@@ -919,6 +945,12 @@ export async function runRecurrentReasoning(
     // stubborn defect repeated across refine rounds counts as +1 for the run
     // (the memory models patterns recurring ACROSS runs, not within one).
     const runDefects = new Set<string>();
+    // Defect-guided beam search (P6): only for router deep-hard AND the quality
+    // effort preset. `consecutiveLow` counts back-to-back sub-escalation scores;
+    // the beam fires ONCE (cost control) when the linear refine looks stuck.
+    const beamEligible = opts.beamSearch === true && getEffort() === "quality";
+    let consecutiveLow = 0;
+    let beamedOnce = false;
     for (let k = 1; k <= depth; k++) {
       if (aborted()) return;
       // Strong verifier: the critic runs on the synthesis (strong) model so the
@@ -936,6 +968,7 @@ export async function runRecurrentReasoning(
       );
       const parsed = verdicts.map(parseJudgment);
       const score = Math.min(...parsed.map((p) => p.score));
+      lastVerifyScore = score; // P7: the run's quality signal (last judged score)
       const defects = [...new Set(parsed.flatMap((p) => p.defects))];
       defects.forEach((d) => runDefects.add(d));
       cb.onThought(
@@ -949,6 +982,44 @@ export async function runRecurrentReasoning(
       // Escalate the fix to the strong model whenever the score is low (any round),
       // so even depth=1 / early low scores aren't left to the weak model.
       const escalate = score < effort.escalateBelow;
+      consecutiveLow = escalate ? consecutiveLow + 1 : 0;
+
+      // ── P6 — Defect-guided beam: linear refine is stuck (2nd sub-escalation
+      // score in a row). Branch BEAM_WIDTH refine candidates in parallel and keep
+      // the one the judge scores highest — a small tree search that can escape a
+      // local optimum the single-line refine can't. Fires at most once per run.
+      if (beamEligible && !beamedOnce && consecutiveLow >= 2) {
+        beamedOnce = true;
+        phaseTag = "beam";
+        const branches = await Promise.all(
+          Array.from({ length: BEAM_WIDTH }, () =>
+            think(
+              [...base, ...ctx, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
+              synthesis,
+              { readOnly: true },
+            ),
+          ),
+        );
+        if (aborted()) return;
+        const branchScores = await Promise.all(
+          branches.map((b) =>
+            think([...base, ...ctx, { role: "assistant", content: b }, JUDGE], synthesis, {
+              tools: false,
+            }).then((v) => parseJudgment(v).score),
+          ),
+        );
+        if (aborted()) return;
+        const best = pickBestBranch(branchScores);
+        draft = branches[best];
+        consecutiveLow = 0; // gave it a fresh branch — restart the streak count
+        cb.onThought(
+          `ビーム探索 ${k}/${depth}（幅 ${BEAM_WIDTH}・最良スコア ${branchScores[best]}）`,
+          synthLabel,
+          draft,
+        );
+        continue;
+      }
+
       const refineModel = escalate ? synthesis : thinking;
       draft = await think(
         [...base, ...ctx, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
@@ -1002,6 +1073,14 @@ export async function runRecurrentReasoning(
       );
     }
     cb.onFinal(final);
+
+    // ── P7 (infrastructure) — record this analysis run's quality×cost for the
+    // thinking model so a future bandit can compare models. Recording only; the
+    // selection is not wired yet. Skipped for the default model (no id to key)
+    // and when no judge score was produced.
+    if (thinking && lastVerifyScore >= 0) {
+      recordModelRun(thinking, lastVerifyScore, runCostUsd);
+    }
   } finally {
     logSummary();
   }

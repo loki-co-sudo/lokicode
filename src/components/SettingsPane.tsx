@@ -25,6 +25,7 @@ import {
 } from "../lib/agentSettings";
 import { defectMemorySize, clearDefectMemory } from "../lib/defectMemory";
 import { evidenceCacheSize, clearEvidenceCache } from "../lib/evidenceCache";
+import { ledgerSize, clearModelLedger } from "../lib/modelLedger";
 import ModelPicker from "./ModelPicker";
 import GithubAccount from "./GithubAccount";
 
@@ -76,6 +77,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
   const [restrictWorkspace, setRestrictWs] = useState(() => getRestrictToWorkspace());
   const [defectCount, setDefectCount] = useState(() => defectMemorySize());
   const [evidenceCount, setEvidenceCount] = useState(() => evidenceCacheSize());
+  const [ledgerCount, setLedgerCount] = useState(() => ledgerSize());
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -86,6 +88,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
     setRestrictWs(getRestrictToWorkspace());
     setDefectCount(defectMemorySize());
     setEvidenceCount(evidenceCacheSize());
+    setLedgerCount(ledgerSize());
     getSettings().then((s) => {
       setStatus(s);
       setModel(s.model);
@@ -336,6 +339,30 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
             className="mb-1 rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
           >
             証拠キャッシュをクリア
+          </button>
+
+          <div className="mb-1 mt-3 flex items-center justify-between gap-2">
+            <label className="text-[11px] text-neutral-400">
+              モデル成績台帳（{ledgerCount} モデルを記録中）
+            </label>
+            <Help
+              text={
+                <>
+                  ディープシンクの各ランについて、思考モデルごとの<b className="text-neutral-300">品質（検証スコア）×コスト</b>を記録します（将来のモデル自動選択の土台）。<b className="text-neutral-300">現在は記録のみ</b>で、モデルの自動切り替えはまだ行いません（十分なデータが溜まってから有効化予定）。ここでリセットできます。
+                </>
+              }
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              clearModelLedger();
+              setLedgerCount(0);
+            }}
+            disabled={ledgerCount === 0}
+            className="mb-1 rounded-md border border-neutral-700 bg-[#1e1e1e] px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
+          >
+            成績台帳をクリア
           </button>
 
           <div className="mt-3 flex items-start justify-between gap-2">

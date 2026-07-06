@@ -80,7 +80,20 @@ describe("pipelineShape", () => {
       finalPlain: 0,
       subtask: 0,
       compose: 0,
+      beamBranch: 0,
+      beamJudge: 0,
     });
+  });
+
+  it("beam (P6) adds BEAM_WIDTH refine branches + their judges", () => {
+    const off = pipelineShape(5, 3, true, 3, 2, false, false);
+    const on = pipelineShape(5, 3, true, 3, 2, false, true);
+    expect(off.beamBranch).toBe(0);
+    expect(off.beamJudge).toBe(0);
+    expect(on.beamBranch).toBe(2);
+    expect(on.beamJudge).toBe(2);
+    // Beam does not disturb the other phases.
+    expect({ ...on, beamBranch: 0, beamJudge: 0 }).toEqual(off);
   });
 
   it("solve-level decomposition replaces the draft with subtask solves + compose", () => {
@@ -159,10 +172,18 @@ describe("structuralCalls", () => {
   it("matches the per-phase shape exactly (single source of truth)", () => {
     const s = pipelineShape(3, 3, true);
     const c = structuralCalls(3, 3, true);
-    expect(c.loop).toBe(s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask);
+    expect(c.loop).toBe(s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask + s.beamBranch);
     expect(c.plain).toBe(
-      s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain + s.compose,
+      s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain + s.compose + s.beamJudge,
     );
+  });
+
+  it("counts beam branches as loops and beam judges as strong plain calls", () => {
+    const c = structuralCalls(5, 3, true, 3, 2, false, true);
+    const s = pipelineShape(5, 3, true, 3, 2, false, true);
+    expect(c.loop).toBe(s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask + s.beamBranch);
+    expect(s.beamBranch).toBe(2);
+    expect(s.beamJudge).toBe(2);
   });
 
   it("counts subtask solves as loops and compose as a strong plain call", () => {

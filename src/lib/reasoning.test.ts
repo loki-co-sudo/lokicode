@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseNeedsExec, parseBrief } from "./reasoning";
+import { parseNeedsExec, parseBrief, pickBestBranch } from "./reasoning";
 
 describe("parseNeedsExec", () => {
   it("parses a clean one-word verdict", () => {
@@ -30,6 +30,19 @@ describe("parseNeedsExec", () => {
 
   it("does not false-match inside words", () => {
     expect(parseNeedsExec("nothing to do here")).toBe(false); // "no" in "nothing" must not count
+  });
+});
+
+describe("pickBestBranch (P6 defect-guided beam selection)", () => {
+  it("returns the index of the highest score", () => {
+    expect(pickBestBranch([70, 85, 60])).toBe(1);
+    expect(pickBestBranch([90, 85, 60])).toBe(0);
+  });
+  it("breaks ties toward the earliest branch", () => {
+    expect(pickBestBranch([80, 80])).toBe(0);
+  });
+  it("handles a single branch", () => {
+    expect(pickBestBranch([42])).toBe(0);
   });
 });
 

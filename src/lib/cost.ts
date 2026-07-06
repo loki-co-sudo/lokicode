@@ -111,6 +111,10 @@ export interface EstimateParams {
   ensembleSamples?: number;
   /** Effort preset's parallel judge samples (defaults to 1). */
   judgeSamples?: number;
+  /** Solve-level decomposition expected (P3). */
+  decompose?: boolean;
+  /** Defect-guided beam expected (P6: deep-hard × quality). */
+  beam?: boolean;
 }
 
 /** Per-phase structural call counts of the orchestrated pipeline
@@ -140,6 +144,12 @@ export interface PipelineShape {
   subtask: number;
   /** The strong-model composition of the sub-task solutions. */
   compose: number;
+  /** Defect-guided beam (P6): parallel refine candidates (strong tool loops).
+   * Fires at most once per run and only on deep-hard×quality; the shape counts
+   * it when `beam` is passed. */
+  beamBranch: number;
+  /** The strong-model judges that score the beam candidates. */
+  beamJudge: number;
 }
 
 export function pipelineShape(
@@ -153,6 +163,9 @@ export function pipelineShape(
   /** Solve-level decomposition happened/expected (P3): sub-task solves replace
    * the MoA draft. Runtime width is data-dependent; the shape assumes 3. */
   decompose = false,
+  /** Defect-guided beam expected (P6): adds BEAM_WIDTH refine branches + their
+   * judges (fires at most once per run on deep-hard×quality). */
+  beam = false,
 ): PipelineShape {
   const breadth = Math.max(1, Math.min(5, Math.floor(samples)));
   const d = Math.max(0, Math.floor(depth));
@@ -163,6 +176,7 @@ export function pipelineShape(
   // so reasoning.ts inserts one read-only investigation of the GOAL first.
   const grounding = useTools && ensemble && breadth === 1 ? 1 : 0;
   const K = 3; // assumed median sub-task width when decomposed
+  const BW = 2; // BEAM_WIDTH (mirrors reasoning.ts)
   return {
     classify: useTools ? 1 : 0,
     brief: 1,
@@ -176,6 +190,8 @@ export function pipelineShape(
     finalPlain: ensemble ? N + 1 : 0,
     subtask: decompose ? K : 0,
     compose: decompose ? 1 : 0,
+    beamBranch: beam ? BW : 0,
+    beamJudge: beam ? BW : 0,
   };
 }
 
@@ -189,11 +205,13 @@ export function structuralCalls(
   ensembleSamples = 2,
   judgeSamples = 1,
   decompose = false,
+  beam = false,
 ): { loop: number; plain: number } {
-  const s = pipelineShape(depth, samples, useTools, ensembleSamples, judgeSamples, decompose);
+  const s = pipelineShape(depth, samples, useTools, ensembleSamples, judgeSamples, decompose, beam);
   return {
-    loop: s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask,
-    plain: s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain + s.compose,
+    loop: s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask + s.beamBranch,
+    plain:
+      s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain + s.compose + s.beamJudge,
   };
 }
 
@@ -210,7 +228,15 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const thinkOut = calib.outTokens;
   const synthOut = Math.round(calib.outTokens * SYNTH_PREMIUM);
   const mult = p.useTools ? calib.toolMult : 1;
-  const sh = pipelineShape(p.depth, p.samples, p.useTools, p.ensembleSamples ?? 2, p.judgeSamples ?? 1);
+  const sh = pipelineShape(
+    p.depth,
+    p.samples,
+    p.useTools,
+    p.ensembleSamples ?? 2,
+    p.judgeSamples ?? 1,
+    p.decompose ?? false,
+    p.beam ?? false,
+  );
 
   // Guard against negative / non-finite prices (e.g. a "-1" variable-price
   // sentinel) so the estimate can never go absurdly negative.
@@ -222,8 +248,9 @@ export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   // Agent-loop phases carry the tool multiplier; plain completions do not.
   const cheapLoop = sh.invest + sh.refine + sh.draftLoop + sh.subtask;
   const cheapPlain = sh.classify + sh.suff + sh.draftPlain;
-  const strongLoop = sh.finalLoop;
-  const strongPlain = sh.brief + sh.finalPlain + sh.judge + sh.compose; // judge/compose run on the strong model
+  // Beam branches are strong-model tool loops; beam judges are strong plain.
+  const strongLoop = sh.finalLoop + sh.beamBranch;
+  const strongPlain = sh.brief + sh.finalPlain + sh.judge + sh.compose + sh.beamJudge; // strong model
   const usd =
     strongPlain * synthPer +
     strongLoop * synthPer * mult +
