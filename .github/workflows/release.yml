@@ -23,9 +23,12 @@ jobs:
         include:
           - platform: windows-latest
             args: ""
-          - platform: macos-latest # Apple Silicon
+          # macos-latest はピン留め: macOS-15→26 移行中で exit 134 (SIGABRT) のビルド
+          # クラッシュを確認したため macos-15 に固定
+          # （https://github.com/actions/runner-images/issues/14167 の公式推奨）。
+          - platform: macos-15 # Apple Silicon
             args: "--target aarch64-apple-darwin"
-          - platform: macos-latest # Intel
+          - platform: macos-15 # Intel
             args: "--target x86_64-apple-darwin"
           - platform: ubuntu-22.04
             args: ""
@@ -49,7 +52,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-15' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache cargo
         uses: swatinem/rust-cache@v2

@@ -30,7 +30,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-22.04]
+        # macos-latest はピン留め: macos-latest が macOS-15→26 へ移行中（npm 10→11・Xcode
+        # 16.4→26.4.1・OpenSSL 1.1.1→3.x）で、ネイティブビルドが exit 134 (SIGABRT) で
+        # 落ちる問題を確認。安定するまで macos-15 に固定
+        # （https://github.com/actions/runner-images/issues/14167 の公式推奨）。
+        os: [windows-latest, macos-15, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
