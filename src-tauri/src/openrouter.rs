@@ -361,13 +361,18 @@ pub async fn complete(
         let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
             let detail = json["error"]["message"].as_str().unwrap_or("unknown error");
-            return Err(format!("API エラー (HTTP {status}): {detail}"));
+            return Err(format!("API エラー (HTTP {status}, model={model}): {detail}"));
         }
+        // Some reasoning models (e.g. DeepSeek series) leave `content` empty and
+        // put the actual text in `reasoning_content` / `reasoning` instead.
+        let msg = &json["choices"][0]["message"];
+        let content = ["content", "reasoning_content", "reasoning"]
+            .iter()
+            .find_map(|k| msg[*k].as_str().filter(|s| !s.trim().is_empty()))
+            .unwrap_or("")
+            .to_string();
         Ok(CompleteResult {
-            content: json["choices"][0]["message"]["content"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            content,
             usage: extract_usage(&json),
         })
     };
@@ -444,7 +449,7 @@ pub async fn chat_once_stream(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        let msg = format!("API エラー (HTTP {status}): {text}");
+        let msg = format!("API エラー (HTTP {status}, model={model}): {text}");
         let _ = on_event.send(AgentStreamEvent::Error { message: msg.clone() });
         return Err(msg);
     }

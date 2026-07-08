@@ -531,40 +531,64 @@ export async function runRecurrentReasoning(
     const start = performance.now();
     const usesTools = opts.useTools && o.tools !== false;
     const tag = o.tag ?? phaseTag;
-    let result: string;
-    if (usesTools) {
-      result = await runAgent(
-        messages,
-        {
-          onAssistantText: () => {},
-          onToolStart: cb.onToolStart,
-          onToolEnd: cb.onToolEnd,
-          approve: cb.approve,
-          onUsage: trackUsage,
-          onFileEdit: cb.onFileEdit,
-        },
-        {
-          approval: opts.approval,
-          model,
-          workspaceRoot: opts.workspaceRoot,
-          signal: opts.signal,
-          readOnly: o.readOnly,
-          cancelId: opts.runId,
-          // Reasoning-phase tool loops are capped by the effort budget: useful
-          // reads saturate after a handful of turns (1.4.1 e2e measurement),
-          // while an uncapped loop wanders one-read-per-turn with ballooning
-          // context. The execute fast path is NOT routed through think().
-          maxIterations: effort.phaseIterations,
-          // On cap, force one no-tools turn so the phase still emits its
-          // structured output (otherwise the limit message leaks downstream
-          // as if it were evidence — observed poisoning a whole run).
-          finalizeOnCap: true,
-        },
-      );
-    } else {
+    const runOnce = async (): Promise<string> => {
+      if (usesTools) {
+        return runAgent(
+          messages,
+          {
+            onAssistantText: () => {},
+            onToolStart: cb.onToolStart,
+            onToolEnd: cb.onToolEnd,
+            approve: cb.approve,
+            onUsage: trackUsage,
+            onFileEdit: cb.onFileEdit,
+          },
+          {
+            approval: opts.approval,
+            model,
+            workspaceRoot: opts.workspaceRoot,
+            signal: opts.signal,
+            readOnly: o.readOnly,
+            cancelId: opts.runId,
+            // Reasoning-phase tool loops are capped by the effort budget: useful
+            // reads saturate after a handful of turns (1.4.1 e2e measurement),
+            // while an uncapped loop wanders one-read-per-turn with ballooning
+            // context. The execute fast path is NOT routed through think().
+            maxIterations: effort.phaseIterations,
+            // On cap, force one no-tools turn so the phase still emits its
+            // structured output (otherwise the limit message leaks downstream
+            // as if it were evidence — observed poisoning a whole run).
+            finalizeOnCap: true,
+          },
+        );
+      }
       const { content, usage } = await complete(messages, model, opts.runId);
       trackUsage(usage);
-      result = content;
+      return content;
+    };
+    const callOnce = async (): Promise<string> => {
+      try {
+        return await runOnce();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("[deepthink] phase failed", { tag, model });
+        throw new Error(`フェーズ「${tag}」でエラー（モデル: ${model || "(default)"}）: ${msg}`);
+      }
+    };
+    let result = await callOnce();
+    // Cancellation intentionally surfaces as an empty completion (see
+    // openrouter.rs `complete`'s cancel arm) — don't treat that as a failure.
+    if (!result.trim() && !aborted()) {
+      // A blank phase output must never flow downstream as draft/evidence — it
+      // poisons later phases the same way a truncated cap message did (CLAUDE.md
+      // "上限・打ち切り・フォールバック" 1.7.x incident). One retry absorbs a
+      // transient empty response before giving up loudly.
+      result = await callOnce();
+      if (!result.trim() && !aborted()) {
+        throw new Error(
+          `フェーズ「${tag}」が空の出力を返しました（モデル: ${model || "(default)"}）。モデルを変えて再実行してください。`,
+        );
+      }
     }
     const ms = performance.now() - start;
     timings.push({ phase: tag, ms, model: model || "(default)", tools: usesTools });

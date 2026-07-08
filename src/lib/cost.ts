@@ -152,6 +152,8 @@ export interface PipelineShape {
   beamJudge: number;
 }
 
+// Counts normal-path calls only; the empty-output retry in reasoning.ts
+// `think()` is an abnormal-path fallback and is intentionally not modeled here.
 export function pipelineShape(
   depth: number,
   samples: number,

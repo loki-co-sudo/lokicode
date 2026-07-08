@@ -2,6 +2,7 @@
 // process (env/.env or the saved settings file) and is never shipped to the webview.
 
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { sanitizeMessages } from "./messages";
 
 export type ChatRole = "system" | "user" | "assistant";
 
@@ -81,7 +82,7 @@ export function chatOnceStream(
       else if (event.type === "error") reject(new Error(event.message));
     };
     invoke("chat_once_stream", {
-      messages,
+      messages: sanitizeMessages(messages),
       tools,
       model: model ?? null,
       cancelId: cancelId ?? null,
@@ -169,7 +170,7 @@ export function complete(
   cancelId?: number,
 ): Promise<CompleteResult> {
   return invoke<CompleteResult>("complete", {
-    messages,
+    messages: sanitizeMessages(messages),
     model: model ?? null,
     cancelId: cancelId ?? null,
   });
