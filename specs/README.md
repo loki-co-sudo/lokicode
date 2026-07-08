@@ -9,7 +9,7 @@
 | ファイル | 内容 | 状態 |
 | --- | --- | --- |
 | [frontier-roadmap.md](frontier-roadmap.md) | **改善計画の正本**（P1〜P6 実装済み・P7 は記録のみ／選択は据え置き） | 現行。実装項目は完了・**残るは P7 自動選択の有効化＝データ待ち** |
-| [fix-roadmap-deepthink-400-crossplatform-shell.md](fix-roadmap-deepthink-400-crossplatform-shell.md) | **修正ロードマップ**: ディープシンク 400 解消・Mac/Linux 対応・ターミナルのシェル選択（実装手順書） | **修正1（400解消）・修正3（シェル選択）実装済み**。修正2は未実装 |
+| [fix-roadmap-deepthink-400-crossplatform-shell.md](fix-roadmap-deepthink-400-crossplatform-shell.md) | **修正ロードマップ**: ディープシンク 400 解消・Mac/Linux 対応・ターミナルのシェル選択（実装手順書） | **修正1・修正2・修正3すべて実装済み**。修正2の実機（Mac/Linux）動作確認・タグ付きリリースは未実施（CI の3OS通過が根拠） |
 | [deep-reasoning-v2.md](deep-reasoning-v2.md) | ディープシンクの基本構造（ブリーフ→調査→ドラフト→検証→合成）と v1→v2 の経緯 | 構造は現行。**固定定数の記述は旧**（エフォートに置換済み） |
 | [agent-v3.md](agent-v3.md) | 難易度ルーター・強い検証器・実行接地の設計 | 現行（ルーターは4分類に拡張済み、検証は最大5回のループモードに発展） |
 | [effort-presets.md](effort-presets.md) | 推論エフォート（速度/バランス/品質）と最小接地 | 現行（1.4/1.5 でパラメータ追加あり・表参照） |

@@ -13,9 +13,32 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    # 修正2: Windows / macOS（Apple Silicon・Intel）/ Linux の4ビルドを同じタグの
+    # 1つの Release にアップロード（tauri-action が latest.json に各プラット
+    # フォームのエントリをまとめる）。macOS は Apple Developer 証明書がないため
+    # 未署名配布（README「対応 OS」参照）。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest # Apple Silicon
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest # Intel
+            args: "--target x86_64-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -25,6 +48,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache cargo
         uses: swatinem/rust-cache@v2
@@ -42,6 +67,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          args: ${{ matrix.args }}
           # タグ名（v0.3.0 など）をそのまま Release タグに使う。
           tagName: ${{ github.ref_name }}
           releaseName: "lokicode ${{ github.ref_name }}"

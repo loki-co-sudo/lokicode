@@ -127,9 +127,10 @@ fn shell(preferred: Option<&str>) -> CommandBuilder {
         }
         // Default: PowerShell ships PSReadLine, giving modern line editing —
         // command history (↑/↓), Ctrl+R reverse search, tab completion, syntax
-        // colors — which cmd.exe lacks. Prefer PowerShell 7 (pwsh) if installed.
-        let exe = if crate::win_which("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
-        let mut c = CommandBuilder::new(exe);
+        // colors — which cmd.exe lacks. Prefer PowerShell 7 (pwsh) if installed
+        // (shared resolution with get_platform_info via crate::default_shell_name).
+        let exe = format!("{}.exe", crate::default_shell_name());
+        let mut c = CommandBuilder::new(&exe);
         c.arg("-NoLogo");
         c
     }

@@ -55,9 +55,11 @@ export function taskKeyFor(question: string): string {
   return hashContent(norm);
 }
 
-// file:line citation matcher: an absolute Windows path (C:\...\x.ts) OR a
-// relative path (src/lib/x.ts / x.ts), followed by :<line>. Valid in JS RegExp.
-const CITATION = /([A-Za-z]:[\\/][^\s:*?"<>|]+?\.[a-z0-9]+|[\w][\w./\\-]*\.[a-z0-9]+):\d+/gi;
+// file:line citation matcher: an absolute Windows path (C:\...\x.ts) OR an
+// absolute POSIX path (/Users/x/proj/a.ts) OR a relative path (src/lib/x.ts /
+// x.ts), followed by :<line>. Valid in JS RegExp.
+const CITATION =
+  /([A-Za-z]:[\\/][^\s:*?"<>|]+?\.[a-z0-9]+|\/[^\s:*?"<>|]+?\.[a-z0-9]+|[\w][\w./\\-]*\.[a-z0-9]+):\d+/gi;
 
 /** All distinct file paths cited (as `path:line`) anywhere in a text. Pure. */
 export function extractCitedPaths(text: string): string[] {

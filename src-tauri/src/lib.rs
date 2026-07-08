@@ -64,6 +64,44 @@ pub(crate) fn win_which(exe: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Display name of the default shell (no `.exe` suffix on Windows), shared by
+/// `get_platform_info` (frontend prompt/UI text) and the integrated terminal's
+/// default resolution (`terminal.rs` `shell(None)`). Windows: prefers pwsh over
+/// Windows PowerShell (PSReadLine). Unix: `$SHELL`'s basename, else "sh". This
+/// does NOT affect `run_command`'s Unix path, which stays hardcoded to
+/// `sh -c` below regardless of the user's login shell (deliberate — keeps tool
+/// call syntax deterministic across users).
+pub(crate) fn default_shell_name() -> String {
+    #[cfg(windows)]
+    {
+        if win_which("pwsh.exe") { "pwsh".to_string() } else { "powershell".to_string() }
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("SHELL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|s| std::path::Path::new(&s).file_name().map(|f| f.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "sh".to_string())
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformInfo {
+    /// "windows" | "macos" | "linux" (std::env::consts::OS).
+    os: String,
+    shell: String,
+}
+
+/// Single source of truth for "what OS/shell is this" — the frontend fetches
+/// this once at startup (`lib/platform.ts`) instead of hardcoding Windows in
+/// prompts and UI text.
+#[tauri::command]
+fn get_platform_info() -> PlatformInfo {
+    PlatformInfo { os: std::env::consts::OS.to_string(), shell: default_shell_name() }
+}
+
 #[derive(Serialize)]
 struct CommandOutput {
     stdout: String,
@@ -96,8 +134,8 @@ async fn run_command(
             // visible console window on EVERY command (alarming, looks like
             // malware). Spawning the shell directly with CREATE_NO_WINDOW keeps the
             // whole invocation — and its child processes — hidden.
-            let shell = if win_which("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
-            let mut c = std::process::Command::new(shell);
+            let shell = format!("{}.exe", default_shell_name());
+            let mut c = std::process::Command::new(&shell);
             c.args(["-NoProfile", "-NonInteractive", "-Command", &command]);
             // CREATE_NO_WINDOW: no console window; output still captured via pipes.
             c.creation_flags(0x0800_0000);
@@ -177,6 +215,7 @@ pub fn run() {
             open_devtools,
             list_dir,
             run_command,
+            get_platform_info,
             openrouter::send_chat,
             openrouter::chat_once_stream,
             openrouter::complete,

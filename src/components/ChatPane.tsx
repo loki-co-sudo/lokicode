@@ -31,6 +31,7 @@ import {
   type EffortLevel,
 } from "../lib/agentSettings";
 import { classifyTask } from "../lib/router";
+import { getPlatformInfo, type PlatformInfo } from "../lib/platform";
 import { LOOP_MAX_ATTEMPTS } from "../lib/loop";
 import { runVerifyLoop } from "../lib/verifyLoop";
 import { assessDeepThinkReadiness, estimateEffectiveLevel } from "../lib/modelGate";
@@ -100,12 +101,23 @@ function buildSystemPrompt(
   rules: string,
   effort: EffortLevel,
   loopMode: boolean,
+  platform: PlatformInfo,
 ): ApiMessage {
+  const isWin = platform.os === "windows";
+  const intro = isWin
+    ? `running on Windows (shell: ${platform.shell}).`
+    : `running on ${platform.os} (run_command executes via sh -c).`;
+  const runCommandLine = isWin
+    ? `run_command runs under PowerShell: prefer PowerShell syntax (e.g. Select-String, Get-Content, Get-ChildItem), use ; or separate calls instead of relying on cmd-only builtins, and prefer the read-only tools (read_file / grep_search / list_dir) over shelling out when they suffice.`
+    : `run_command runs under a POSIX shell (sh -c): use POSIX shell syntax (e.g. grep, cat, ls), use ; or && or separate calls, and prefer the read-only tools (read_file / grep_search / list_dir) over shelling out when they suffice.`;
+  const pathLine = isWin
+    ? `- Use absolute Windows paths.`
+    : `- Use absolute POSIX paths (/-separated).`;
   return {
     role: "system",
-    content: `You are lokicode's coding agent embedded in a desktop code editor running on Windows (shell: PowerShell).
+    content: `You are lokicode's coding agent embedded in a desktop code editor ${intro}
 You can use the provided tools to read/list/write files and run shell commands to actually accomplish the user's request — not just describe it.
-run_command runs under PowerShell: prefer PowerShell syntax (e.g. Select-String, Get-Content, Get-ChildItem), use ; or separate calls instead of relying on cmd-only builtins, and prefer the read-only tools (read_file / grep_search / list_dir) over shelling out when they suffice.
+${runCommandLine}
 Operating principles:
 - You are an agent: keep going until the user's request is fully resolved before ending your turn. When the task asks you to DO something, do it with tools — never stop at describing what you would do.
 - Work from the GOAL and any CONSTRAINTS, not a fixed recipe: choose your own means, but never take irreversible actions beyond what was asked, and respect every stated constraint.
@@ -115,7 +127,7 @@ Operating principles:
 - On errors or missing info, do not freeze or invent facts: gather evidence with tools, and if the same approach fails twice, switch strategy or ask_user rather than repeating it.
 - Before giving your final answer, self-check it against the goal and constraints; if it is incomplete, wrong, or violates a constraint, fix it. Report honestly what you could not verify.
 Guidelines:
-- Use absolute Windows paths.
+${pathLine}
 - Use grep_search to locate code across the workspace instead of guessing file paths.
 - Read a file immediately before editing it. write_file OVERWRITES the whole file, so reproduce the existing content exactly except for your intended change; never write a file you have not read this session.
 - Make MINIMAL, FAITHFUL edits: change only what the task requires. When adding or appending content, do NOT rewrite, paraphrase, reformat, or "improve" the surrounding existing text, and preserve its exact wording and Markdown formatting (e.g. \`code\` backticks). Never invent technical details (APIs, file names, behaviors) that you have not verified in the codebase — if unsure, read the file or leave the original text untouched.
@@ -871,6 +883,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         rulesText,
         effortLevel,
         loopMode && agentMode,
+        getPlatformInfo(),
       ),
     ];
     if (includeFile && currentCode.trim()) {
@@ -1207,9 +1220,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     if (!pending) return;
     const p = pending;
     setExplain({ loading: true, text: "" });
+    const plat = getPlatformInfo();
+    const shellLabel = plat.os === "windows" ? plat.shell : "sh";
     const target =
       p.name === "run_command"
-        ? `次のシェルコマンド（Windows・cmd）を実行しようとしています:\n\n${String(p.args.command ?? "")}`
+        ? `次のシェルコマンド（${plat.os}・${shellLabel}）を実行しようとしています:\n\n${String(p.args.command ?? "")}`
         : p.name === "write_file"
           ? `次のファイルに書き込もうとしています: ${String(p.args.path ?? "")}\n\n書き込む内容（先頭のみ）:\n${String(p.args.content ?? "").slice(0, 4000)}`
           : `次の操作 ${p.name} を引数 ${JSON.stringify(p.args)} で実行しようとしています。`;

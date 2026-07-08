@@ -24,10 +24,22 @@ jobs:
         run: npx vitest run
 
   rust:
-    # Windows is the app's target; running here avoids needing Linux WebView libs.
-    runs-on: windows-latest
+    # Cross-platform gate (修正2): Windows is the primary dev target, but the app
+    # ships on macOS/Linux too (release.yml builds all three), so clippy/tests
+    # must pass on each before a release build is trusted.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: actions/setup-node@v4
         with:
           node-version: 20

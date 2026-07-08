@@ -49,6 +49,12 @@ describe("extractCitedPaths", () => {
     expect(extractCitedPaths("(agent.ts:12)")).toContain("agent.ts");
   });
 
+  it("extracts an absolute POSIX path (macOS/Linux)", () => {
+    expect(extractCitedPaths("見た `/Users/x/proj/src/a.ts:12` を確認")).toContain(
+      "/Users/x/proj/src/a.ts",
+    );
+  });
+
   it("returns nothing when there is no citation", () => {
     expect(extractCitedPaths("no citation here, just prose")).toEqual([]);
   });

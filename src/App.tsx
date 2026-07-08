@@ -30,6 +30,8 @@ import { listFiles } from "./lib/search";
 import { addRecentFile, addRecentFolder, recentFiles, recentFolders } from "./lib/recent";
 import { safeSetItem } from "./lib/chatStorage";
 import { loadKeybindings, comboFromEvent, type ActionId } from "./lib/keybindings";
+import { initPlatformInfo } from "./lib/platform";
+import { initPathCaseSensitivity } from "./lib/agent";
 
 export interface Tab {
   id: string;
@@ -62,6 +64,13 @@ export default function App() {
   const [activeId, setActiveId] = useState("");
 
   const [settingsVersion, setSettingsVersion] = useState(0);
+
+  // Fetch+cache OS/shell once at startup; buildSystemPrompt/UI text read the
+  // cache synchronously instead of hardcoding Windows (修正2). Also flips the
+  // agent's path-containment check to case-sensitive on Linux.
+  useEffect(() => {
+    void initPlatformInfo().then((p) => initPathCaseSensitivity(p.os));
+  }, []);
 
   // Open workspace folders (multi-root). The first is the "primary" root used by
   // Git / search / terminal / the agent; the explorer shows them all.

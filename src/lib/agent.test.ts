@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { commandRisk, toolNeedsApproval } from "./agent";
+import { describe, it, expect, afterEach } from "vitest";
+import { commandRisk, toolNeedsApproval, withinWorkspace, initPathCaseSensitivity } from "./agent";
 
 describe("commandRisk", () => {
   it("treats read-only commands as safe (incl. PowerShell Format-*)", () => {
@@ -53,5 +53,20 @@ describe("toolNeedsApproval", () => {
     expect(toolNeedsApproval("standard", "run_command", cmd("npm run build"))).toBe(false);
     expect(toolNeedsApproval("standard", "run_command", cmd("git push"))).toBe(true);
     expect(toolNeedsApproval("standard", "run_command", cmd("rm -rf dist"))).toBe(true);
+  });
+});
+
+describe("withinWorkspace path case-sensitivity (initPathCaseSensitivity)", () => {
+  afterEach(() => initPathCaseSensitivity("windows")); // restore the default (case-insensitive)
+
+  it("defaults to case-insensitive (Windows/macOS FS behavior)", () => {
+    expect(withinWorkspace("/Home/X/file.ts", "/home/x")).toBe(true);
+  });
+
+  it("treats differently-cased paths as distinct on Linux (case-sensitive FS)", () => {
+    initPathCaseSensitivity("linux");
+    expect(withinWorkspace("/Home/X/file.ts", "/home/x")).toBe(false);
+    // Same-case still matches.
+    expect(withinWorkspace("/home/x/file.ts", "/home/x")).toBe(true);
   });
 });

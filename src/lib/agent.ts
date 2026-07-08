@@ -286,10 +286,23 @@ interface SearchMatch {
   text: string;
 }
 
+/** Whether path containment comparison ignores case. Windows and macOS's
+ * default filesystem are case-insensitive; Linux's is not, so unconditional
+ * lowercasing there would let e.g. `<root>/../SECRET` register as equal to an
+ * already-seen lowercase path and slip past a naive containment check.
+ * Defaults to case-insensitive (prior behavior); `initPathCaseSensitivity`
+ * flips it once the real OS is known (App.tsx, after `initPlatformInfo`).
+ * Exported so tests can inject a specific mode. */
+let caseInsensitive = true;
+
+export function initPathCaseSensitivity(os: string): void {
+  caseInsensitive = os !== "linux";
+}
+
 /** Normalize an absolute path for containment comparison: unify separators,
- * resolve `.`/`..` segments, drop a trailing slash, lowercase (Windows is
- * case-insensitive). Resolving `..` is essential so `<root>/../secret` can't
- * slip past a naive prefix check. */
+ * resolve `.`/`..` segments, drop a trailing slash, lowercase when the target
+ * FS is case-insensitive. Resolving `..` is essential so `<root>/../secret`
+ * can't slip past a naive prefix check. */
 function normAbs(p: string): string {
   const out: string[] = [];
   for (const seg of p.replace(/\\/g, "/").split("/")) {
@@ -297,12 +310,14 @@ function normAbs(p: string): string {
     if (seg === "..") out.pop();
     else out.push(seg);
   }
-  return out.join("/").toLowerCase();
+  const joined = out.join("/");
+  return caseInsensitive ? joined.toLowerCase() : joined;
 }
 
 /** Is `target` inside (or equal to) `root`? Used to confine agent file access to
- * the workspace when the "restrict to workspace" setting is on. */
-function withinWorkspace(target: string, root: string): boolean {
+ * the workspace when the "restrict to workspace" setting is on. Exported for
+ * the case-sensitivity test (`initPathCaseSensitivity`). */
+export function withinWorkspace(target: string, root: string): boolean {
   const r = normAbs(root);
   const t = normAbs(target);
   return t === r || t.startsWith(r + "/");
