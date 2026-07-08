@@ -11,6 +11,77 @@ use std::io::{Read, Write};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellInfo {
+    /// Name/path used to launch it (Windows: "pwsh" | "powershell" | "cmd" | "bash";
+    /// Unix: an absolute path from /etc/shells or $SHELL).
+    id: String,
+    label: String,
+}
+
+/// Enumerate shells actually present on this machine, for the terminal shell
+/// picker (`agentSettings.ts` `getTerminalShell`/`TerminalPanel.tsx`). Only the
+/// integrated terminal uses this — the agent's `run_command` shell stays fixed
+/// (see specs/terminal-shell-selection.md scope note).
+#[tauri::command]
+pub fn list_shells() -> Vec<ShellInfo> {
+    #[cfg(windows)]
+    {
+        let mut out = Vec::new();
+        if crate::win_which("pwsh.exe") {
+            out.push(ShellInfo { id: "pwsh".to_string(), label: "PowerShell 7".to_string() });
+        }
+        if crate::win_which("powershell.exe") {
+            out.push(ShellInfo {
+                id: "powershell".to_string(),
+                label: "Windows PowerShell".to_string(),
+            });
+        }
+        if crate::win_which("cmd.exe") {
+            out.push(ShellInfo { id: "cmd".to_string(), label: "コマンドプロンプト".to_string() });
+        }
+        // Git Bash (or any bash.exe on PATH). WSL's bash.exe is indistinguishable
+        // this way — intentionally not special-cased (see spec).
+        if crate::win_which("bash.exe") {
+            out.push(ShellInfo { id: "bash".to_string(), label: "Git Bash".to_string() });
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        let mut add = |path: &str| {
+            let path = path.trim();
+            if path.is_empty() || !std::path::Path::new(path).exists() {
+                return;
+            }
+            if !seen.insert(path.to_string()) {
+                return;
+            }
+            let label = std::path::Path::new(path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string());
+            out.push(ShellInfo { id: path.to_string(), label });
+        };
+        if let Ok(sh) = std::env::var("SHELL") {
+            add(&sh);
+        }
+        if let Ok(contents) = std::fs::read_to_string("/etc/shells") {
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                add(line);
+            }
+        }
+        out
+    }
+}
+
 #[derive(Default)]
 pub struct TerminalState(pub Mutex<HashMap<String, Session>>);
 
@@ -26,12 +97,37 @@ struct Chunk {
     data: String,
 }
 
-fn shell() -> CommandBuilder {
+/// Build the launch command for the integrated terminal. `preferred` (from the
+/// UI's shell picker) is honored when it resolves to something actually present;
+/// otherwise falls back to the previous fixed default (never errors here — a
+/// bad/stale preference just degrades to the default instead of failing to open
+/// a terminal at all).
+fn shell(preferred: Option<&str>) -> CommandBuilder {
     #[cfg(windows)]
     {
-        // PowerShell ships PSReadLine, giving modern line editing — command
-        // history (↑/↓), Ctrl+R reverse search, tab completion, syntax colors —
-        // which cmd.exe lacks. Prefer PowerShell 7 (pwsh) if installed.
+        if let Some(p) = preferred.map(str::trim).filter(|p| !p.is_empty()) {
+            let exe = match p {
+                "cmd" => Some("cmd.exe"),
+                "pwsh" => Some("pwsh.exe"),
+                "powershell" => Some("powershell.exe"),
+                "bash" => Some("bash.exe"),
+                _ => None,
+            };
+            if let Some(exe) = exe {
+                if crate::win_which(exe) {
+                    let mut c = CommandBuilder::new(exe);
+                    // PSReadLine (history/search/completion) only applies to the
+                    // PowerShell family; cmd doesn't understand -NoLogo.
+                    if exe == "pwsh.exe" || exe == "powershell.exe" {
+                        c.arg("-NoLogo");
+                    }
+                    return c;
+                }
+            }
+        }
+        // Default: PowerShell ships PSReadLine, giving modern line editing —
+        // command history (↑/↓), Ctrl+R reverse search, tab completion, syntax
+        // colors — which cmd.exe lacks. Prefer PowerShell 7 (pwsh) if installed.
         let exe = if crate::win_which("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
         let mut c = CommandBuilder::new(exe);
         c.arg("-NoLogo");
@@ -39,6 +135,11 @@ fn shell() -> CommandBuilder {
     }
     #[cfg(not(windows))]
     {
+        if let Some(p) = preferred.map(str::trim).filter(|p| !p.is_empty()) {
+            if std::path::Path::new(p).exists() {
+                return CommandBuilder::new(p);
+            }
+        }
         let sh = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
         CommandBuilder::new(sh)
     }
@@ -53,6 +154,7 @@ pub fn terminal_start(
     cwd: Option<String>,
     rows: Option<u16>,
     cols: Option<u16>,
+    shell_pref: Option<String>,
 ) -> Result<(), String> {
     {
         let mut map = state.0.lock().map_err(|e| e.to_string())?;
@@ -71,14 +173,14 @@ pub fn terminal_start(
         })
         .map_err(|e| format!("PTY の作成に失敗しました: {e}"))?;
 
-    let mut cmd = shell();
+    let mut cmd = shell(shell_pref.as_deref());
     if let Some(dir) = cwd.filter(|d| !d.trim().is_empty()) {
         cmd.cwd(dir);
     }
     let child = pair
         .slave
         .spawn_command(cmd)
-        .map_err(|e| format!("シェルの起動に失敗しました: {e}"))?;
+        .map_err(|e| format!("シェルの起動に失敗しました（shell={}）: {e}", shell_pref.as_deref().unwrap_or("(既定)")))?;
     drop(pair.slave);
 
     let mut reader = pair

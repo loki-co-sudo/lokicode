@@ -4,6 +4,8 @@ import {
   EFFORT_AGENT_GUIDANCE,
   DEFAULT_EFFORT,
   getEffort,
+  getTerminalShell,
+  setTerminalShell,
   type EffortLevel,
 } from "./agentSettings";
 
@@ -52,5 +54,29 @@ describe("effort presets", () => {
   it("falls back to the balanced default without localStorage (node env)", () => {
     expect(getEffort()).toBe(DEFAULT_EFFORT);
     expect(DEFAULT_EFFORT).toBe("balanced");
+  });
+});
+
+// Minimal in-memory localStorage for the round-trip test (node env has none).
+function installLocalStorage() {
+  const store = new Map<string, string>();
+  (globalThis as Record<string, unknown>).localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+}
+
+describe("terminal shell preference", () => {
+  it("defaults to empty (auto = previous fixed behavior) without localStorage", () => {
+    expect(getTerminalShell()).toBe("");
+  });
+
+  it("round-trips through localStorage", () => {
+    installLocalStorage();
+    setTerminalShell("pwsh");
+    expect(getTerminalShell()).toBe("pwsh");
+    setTerminalShell("");
+    expect(getTerminalShell()).toBe("");
   });
 });

@@ -189,6 +189,7 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,
+            terminal::list_shells,
             openrouter::list_models,
             openrouter::get_settings,
             openrouter::save_settings,

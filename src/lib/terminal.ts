@@ -1,8 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export function terminalStart(id: string, cwd: string | null, rows: number, cols: number): Promise<void> {
-  return invoke("terminal_start", { id, cwd: cwd ?? null, rows, cols });
+export function terminalStart(
+  id: string,
+  cwd: string | null,
+  rows: number,
+  cols: number,
+  shell?: string | null,
+): Promise<void> {
+  return invoke("terminal_start", { id, cwd: cwd ?? null, rows, cols, shellPref: shell ?? null });
+}
+
+export interface ShellInfo {
+  id: string;
+  label: string;
+}
+
+/** Shells actually present on this machine, for the terminal shell picker. */
+export function listShells(): Promise<ShellInfo[]> {
+  return invoke("list_shells");
 }
 
 export function terminalWrite(id: string, data: string): Promise<void> {

@@ -6,6 +6,7 @@ const VERIFY_KEY = "lokicode.verifyCommand";
 const RESTRICT_KEY = "lokicode.restrictToWorkspace";
 const EFFORT_KEY = "lokicode.effort";
 const LOOP_KEY = "lokicode.loopMode";
+const TERMINAL_SHELL_KEY = "lokicode.terminalShell";
 
 /** Max times the agent re-runs the verify command and fixes failures. */
 export const MAX_VERIFY_ATTEMPTS = 2;
@@ -162,6 +163,27 @@ export function getRestrictToWorkspace(): boolean {
 export function setRestrictToWorkspace(on: boolean) {
   try {
     localStorage.setItem(RESTRICT_KEY, on ? "1" : "0");
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/** Preferred shell for newly-opened INTEGRATED TERMINAL sessions (id from
+ * `terminal.ts` `listShells()`). Empty = auto = previous fixed-default
+ * behavior. Does not affect the agent's `run_command` shell (scoped to the
+ * terminal only — see specs/terminal-shell-selection.md). Applies to the next
+ * terminal opened; existing sessions are unaffected. */
+export function getTerminalShell(): string {
+  try {
+    return localStorage.getItem(TERMINAL_SHELL_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setTerminalShell(v: string) {
+  try {
+    localStorage.setItem(TERMINAL_SHELL_KEY, v);
   } catch {
     /* non-fatal */
   }

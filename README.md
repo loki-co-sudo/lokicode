@@ -167,7 +167,8 @@ npm run tauri dev
 ### エディタ
 Monaco ベース（VS Code のエディタ）。複数タブ・**分割表示**、**コマンドパレット**（Ctrl+Shift+P）/ **クイックオープン**（Ctrl+P）、**横断検索・置換**、**アウトライン/シンボル検索**（Ctrl+Shift+O）、タブのドラッグ並べ替え・ピン留め、**複数フォルダ（マルチルート）**、自動保存、ドラッグ＆ドロップで開く、ライト/ダークテーマ、起動状態の復元、ようこそ画面に**最近開いたフォルダ／ファイル**を表示。
 
-- **統合ターミナル**（Ctrl+J）— PTY ベース（xterm.js）。複数タブ・分割、Windows は **PowerShell**（履歴↑↓・Ctrl+R・タブ補完）、**コピー/ペースト**（Ctrl+Shift+C/V・Ctrl+V・Shift+Insert・右クリック）、1万行スクロールバック。起動時は**閉じた状態で開始**（必要なときに開く）。これは ConPTY が裏で `conhost` を起動する際、起動直後に一瞬コンソール窓が点滅するのを防ぐため（自動復元しない）。
+- **統合ターミナル**（Ctrl+J）— PTY ベース（xterm.js）。複数タブ・分割、既定は Windows **PowerShell**（pwsh 優先・履歴↑↓・Ctrl+R・タブ補完）、**コピー/ペースト**（Ctrl+Shift+C/V・Ctrl+V・Shift+Insert・右クリック）、1万行スクロールバック。起動時は**閉じた状態で開始**（必要なときに開く）。これは ConPTY が裏で `conhost` を起動する際、起動直後に一瞬コンソール窓が点滅するのを防ぐため（自動復元しない）。
+- **シェル選択**：タブバー右側のプルダウンで起動シェルを選べます（Windows: pwsh / PowerShell / cmd / Git Bash のうち PATH 上に実在するもの、Unix: `/etc/shells` と `$SHELL` から検出）。「自動（既定）」なら従来どおりの挙動。**変更は次に開くターミナルから適用**され、既存タブは影響を受けません。対象は統合ターミナルのみで、AI エージェントの `run_command` が使うシェルは変わりません（仕様: [specs/terminal-shell-selection.md](specs/terminal-shell-selection.md)）
 - **パネルのトグル**：Ctrl+B サイドバー / Ctrl+Alt+B AI エージェント / Ctrl+J ターミナル
 - **設定**は左アクティビティバーの歯車から（**テーマ（ライト/ダーク）** / API キー / ベース URL / 各モデル / **ループ上限・コマンドタイムアウト・検証コマンド** / キーバインド / GitHub 連携）。各項目の詳しい説明は、ラベル横の **「?」アイコンにホバー**すると表示されます
 
@@ -291,7 +292,7 @@ src/
     modelGate.ts          # ディープシンクのモデル要件ゲート（必要知能・ツール対応の判定）
     files.ts              # ファイル開く/保存・言語判定
     search.ts             # grep / list_files / replace_in_files のラッパ
-    terminal.ts           # ターミナルの開始 / 入力 / 出力購読のラッパ
+    terminal.ts           # ターミナルの開始 / 入力 / 出力購読・シェル一覧のラッパ
     recent.ts             # 最近開いたフォルダ/ファイルの記録
     github.ts             # GitHub ログイン（device flow）コマンドのラッパ
     updater.ts            # 更新チェック / ダウンロード / 再起動のラッパ
@@ -302,7 +303,7 @@ src-tauri/
   src/
     lib.rs                # プラグイン登録・ファイル IO / list_dir / run_command / open_devtools
     search.rs             # grep_search / list_files / replace_in_files
-    terminal.rs           # 統合ターミナル（PTY・出力ストリーミング・リサイズ）
+    terminal.rs           # 統合ターミナル（PTY・出力ストリーミング・リサイズ・シェル選択 list_shells）
     git.rs                # Git コマンド（git CLI ラッパ）
     github.rs             # GitHub OAuth Device Flow・トークン保存・push/pull 認証
     openrouter.rs         # キー解決・complete / chat_once / streaming・モデル一覧・設定

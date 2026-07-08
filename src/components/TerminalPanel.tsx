@@ -9,7 +9,10 @@ import {
   terminalKill,
   onTerminalOutput,
   onTerminalExit,
+  listShells,
+  type ShellInfo,
 } from "../lib/terminal";
+import { getTerminalShell, setTerminalShell } from "../lib/agentSettings";
 
 interface TerminalPanelProps {
   cwd: string | null;
@@ -105,7 +108,7 @@ function TerminalView({ id, cwd, active }: { id: string; cwd: string | null; act
       if (sid === id) term.write("\r\n\x1b[90m[プロセスが終了しました]\x1b[0m\r\n");
     }).then((u) => (disposed ? u() : (unExit = u)));
 
-    terminalStart(id, cwd, term.rows, term.cols).catch((e) =>
+    terminalStart(id, cwd, term.rows, term.cols, getTerminalShell() || null).catch((e) =>
       term.write(`\r\n[ターミナル起動エラー] ${e}\r\n`),
     );
 
@@ -161,6 +164,14 @@ export default function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
   ]);
   const [activeId, setActiveId] = useState(() => tabs[0].id);
   const [split, setSplit] = useState(false);
+  const [shells, setShells] = useState<ShellInfo[]>([]);
+  const [shellPref, setShellPref] = useState(() => getTerminalShell());
+
+  useEffect(() => {
+    listShells()
+      .then(setShells)
+      .catch(() => setShells([]));
+  }, []);
 
   function addTab() {
     termCounter += 1;
@@ -212,6 +223,22 @@ export default function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
             ＋
           </button>
         </div>
+        <select
+          value={shellPref}
+          onChange={(e) => {
+            setShellPref(e.target.value);
+            setTerminalShell(e.target.value);
+          }}
+          title="新しく開くターミナルから適用されます"
+          className="rounded border border-neutral-700 bg-[#1b1b1c] px-1 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+        >
+          <option value="">自動（既定）</option>
+          {shells.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label}
+            </option>
+          ))}
+        </select>
         <button
           onClick={() => setSplit((v) => !v)}
           title={split ? "タブ表示に戻す" : "分割表示（横並び）"}
