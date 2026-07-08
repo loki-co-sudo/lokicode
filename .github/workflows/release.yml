@@ -69,6 +69,10 @@ jobs:
           # 更新成果物（.sig / latest.json）への署名鍵。
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # beforeBuildCommand（npm run build）が macOS で exit 134 (SIGABRT／JS heap
+          # out of memory) になる問題の回避。ci.yml と同じ理由（Monaco Editor 同梱でモジュール
+          # グラフが大きい）。
+          NODE_OPTIONS: --max-old-space-size=4096
         with:
           args: ${{ matrix.args }}
           # タグ名（v0.3.0 など）をそのまま Release タグに使う。

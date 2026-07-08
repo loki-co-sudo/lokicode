@@ -51,6 +51,11 @@ jobs:
       # tauri::generate_context! embeds ../dist at compile time, so the frontend
       # must be built before the Rust crate will compile.
       - name: Build frontend (produces dist/)
+        # Monaco Editor 同梱でモジュールグラフが大きく、既定の V8 ヒープ上限だと
+        # macOS ランナーで node が exit 134 (SIGABRT／JS heap out of memory) で
+        # 落ちる（Linux/Windows は既定でも通る）。ヒープ上限を明示的に引き上げる。
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: |
           npm ci
           npm run build
