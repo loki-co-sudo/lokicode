@@ -18,7 +18,7 @@
 | [model-gate.md](model-gate.md) | モデル要件ゲート（必要知能の判定基準） | 現行 |
 | [speed-and-level.md](speed-and-level.md) | フェーズ反復バジェット（実測45%短縮）・実効レベル推定式 | 現行 |
 | [loop-mode.md](loop-mode.md) | ループモード（変更→検証→修正・証拠つき完了・手詰まり停止） | 現行（1.6.0 でディープ実行フェーズにも適用済み。共有実装は `lib/verifyLoop.ts`） |
-| [advisor-mode.md](advisor-mode.md) | アドバイザーモード（詰まり検出時の自動相談＋ユーザー明示指示での相談ツール） | **実装中**。経路A（`verifyLoop.ts` 自動相談）は実装・テスト済み。経路B（`consult_advisor` ツール）・設定永続化・UI配線は未着手 |
+| [advisor-mode.md](advisor-mode.md) | アドバイザーモード（詰まり検出時の自動相談＋ユーザー明示指示での相談ツール） | **実装済み**（Agent モード・ディープシンク実行フェーズ両方に配線）。UIの目視確認・有料実走計測は未実施 |
 
 ## その他
 

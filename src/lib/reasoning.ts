@@ -24,7 +24,7 @@ import {
 } from "./agentSettings";
 import { detectVerifyCommand } from "./verifyCommand";
 import { LOOP_MAX_ATTEMPTS } from "./loop";
-import { runVerifyLoop } from "./verifyLoop";
+import { runVerifyLoop, type AdvisorStuckContext } from "./verifyLoop";
 import { buildRepoMap } from "./repoMap";
 import { recordDefects, defectReminder } from "./defectMemory";
 import { taskKeyFor, buildCachedFactsMessage, recordVerifiedFacts } from "./evidenceCache";
@@ -88,6 +88,10 @@ export interface ReasoningCallbacks {
   /** Fired if the post-execution grounded review (CRITERIA/CONSTRAINTS check
    * against the diff) actually ran, for cost calibration (`execReview`). */
   onExecReview?: () => void;
+  /** Fired if the advisor auto-consult (advisor-mode.md §1 経路A) actually
+   * fired during the execute phase's verify loop, for cost calibration
+   * (`advisorConsult` — same asymmetry rule as `onExecReview`). */
+  onAdvisorConsult?: () => void;
 }
 
 export interface ReasoningOptions {
@@ -122,6 +126,17 @@ export interface ReasoningOptions {
   signal?: { aborted: boolean };
   /** Run id for backend cancellation; lets Stop abort in-flight API calls. */
   runId?: number;
+  /** Optional stronger model for advisor-mode (specs/advisor-mode.md). When
+   * set, threaded ONLY into the execute phase's options (both the
+   * consult_advisor tool advertisement and, when `advisorAuto` is also true,
+   * the P10 verify loop's auto-consult hook) — deliberately NOT into
+   * `think()`'s brief/investigate/judge/final calls (see advisor-mode.md §3
+   * for why those are excluded). */
+  advisorModel?: string;
+  /** Gates ONLY the P10 verify loop's advisor auto-consult (経路A). The
+   * consult_advisor TOOL (経路B) is independent of this flag — it advertises
+   * whenever `advisorModel` is set, per advisor-mode.md §2. Default false. */
+  advisorAuto?: boolean;
 }
 
 export const MAX_DEPTH = 16;
@@ -776,6 +791,9 @@ export async function runRecurrentReasoning(
         readOnly: false,
         cancelId: opts.runId,
         traceTag: "execute",
+        // consult_advisor tool (経路B) — advertised only in the execute phase,
+        // never in think()'s analysis phases (advisor-mode.md §3).
+        advisorModel: opts.advisorModel,
         // Refuse a premature stop while the executor's own plan still has open steps:
         // hand back the unfinished items so it continues in-context instead of quitting.
         onIdle: (): string | null => {
@@ -851,6 +869,39 @@ export async function runRecurrentReasoning(
           onCommandEnd: (ok, log) => cb.onToolEnd(ok ? "done" : "error", log),
           report: (m) => cb.onFinal(m),
           aborted,
+          // Advisor auto-consult (経路A): built only when a model is
+          // configured. `briefText` (GOAL/CRITERIA/CONSTRAINTS) stands in for
+          // the original request — already a clean task description, and in
+          // scope here unlike the raw user message. Without task context the
+          // advisor sees only a bare error (advisor design review finding).
+          consultAdvisor: opts.advisorModel && opts.advisorAuto
+            ? async (ctx: AdvisorStuckContext): Promise<string | null> => {
+                try {
+                  const { content, usage } = await complete(
+                    [
+                      sys(
+                        "You are a senior advisor being consulted by another AI agent that is " +
+                          "stuck fixing a failing verification command. Answer concisely and " +
+                          "concretely — actionable guidance, not a restatement of the question.",
+                      ),
+                      usr(
+                        `設計ブリーフ（元のタスク）:\n${briefText}\n\n` +
+                          `検証コマンドが試行 ${ctx.attempt}/${ctx.maxAttempts} で同じエラーを2回連続で出し、詰まっています。\n\n` +
+                          `エラーログ:\n${ctx.log}\n\n` +
+                          `原因の見立てと、次に試すべき具体的な一手を教えてください。`,
+                      ),
+                    ],
+                    opts.advisorModel,
+                    opts.runId,
+                  );
+                  trackUsage(usage);
+                  cb.onAdvisorConsult?.();
+                  return content || null;
+                } catch {
+                  return null;
+                }
+              }
+            : undefined,
         });
         timings.push({
           phase: "verify-exec",

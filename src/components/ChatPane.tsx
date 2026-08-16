@@ -589,6 +589,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   // post-run cost calibration (see cost.ts pipelineShape's execPath doc).
   const execPathRef = useRef(false);
   const execReviewRef = useRef(false);
+  const advisorConsultRef = useRef(false);
 
   // Approximate input tokens of the base prompt that will be sent (system +
   // history + optional active file + the pending input). CJK-aware.
@@ -881,6 +882,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     callCountRef.current = 0;
     execPathRef.current = false;
     execReviewRef.current = false;
+    advisorConsultRef.current = false;
     editedRef.current = false;
     abortRef.current = { aborted: false };
     const signal = abortRef.current;
@@ -1021,6 +1023,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             ensemble: effEnsemble,
             signal,
             runId,
+            // consult_advisor tool + P10 verify loop's advisor auto-consult
+            // (経路B/経路A), execute phase only — see advisor-mode.md §3.
+            advisorModel: advisorModel || undefined,
+            advisorAuto,
           },
           {
             onThought: (label, m, content) =>
@@ -1044,6 +1050,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             },
             onExecReview: () => {
               execReviewRef.current = true;
+            },
+            onAdvisorConsult: () => {
+              advisorConsultRef.current = true;
             },
             // No verify command configured: offer the inferred one ONCE via the
             // same approval UI as a tool call, so nothing runs silently.
@@ -1189,6 +1198,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           false,
           execPathRef.current,
           execReviewRef.current,
+          advisorConsultRef.current,
         );
         const actualLoop = Math.max(1, callCountRef.current - plain);
         recordToolRun(actualLoop, loop);
