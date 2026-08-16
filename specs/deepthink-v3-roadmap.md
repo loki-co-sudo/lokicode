@@ -194,6 +194,15 @@ P8 なしに P11〜P13 を入れると、効果の有無が永久に判別でき
 
 ## P9. 決定的な引用検証（citation validation）〔軸1・最安〕
 
+> **実装状況 (1.11.1)**: 実装済み。`INVESTIGATOR`（`reasoning.ts`）の VERIFIED 行を
+> `path:line — "抜粋" → 事実` 形式に変更し、`investigate()` の直後に
+> `citations.ts` の `extractCitations` / `validateCitations` /
+> `downgradeUnverifiedCitations` で機械検証・自動降格するゲートを追加した。
+> `evidenceCache` への記録は `investigate()` の戻り値（降格後のテキスト）を
+> 経由するため、5. の「記録前の検証」も自動的に満たされる（別配線は不要）。
+> ユニットテストは `citations.test.ts`（抽出・段階1/2・降格の発火/非発火を
+> 件数で assert）。**P8 グレーダでの導入前後比較は未計測**（有料実走待ち）。
+
 - **動機**: 欠陥 F。引用の実在確認は LLM 不要で決定的にでき、判定側の知能に依存しない
   地上真実になる。検証を独立した軸として増強すると精度が上がることは
   *LLM-as-a-Verifier*（arXiv:2607.05391、要旨確認済み）の「criteria decomposition /

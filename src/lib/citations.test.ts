@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractCitations, validateCitations } from "./citations";
+import { extractCitations, validateCitations, downgradeUnverifiedCitations } from "./citations";
 
 describe("extractCitations", () => {
   it("extracts a relative path citation", () => {
@@ -101,5 +101,79 @@ describe("validateCitations", () => {
     );
     expect(r.ok).toBe(false);
     expect(r.invalid).toHaveLength(2);
+  });
+});
+
+describe("downgradeUnverifiedCitations", () => {
+  const goodText = [
+    "VERIFIED:",
+    '- a.ts:1 — "real line" → this fact is grounded',
+    '- fake.ts:5 — "made up" → this fact is fabricated',
+    "",
+    "ASSUMPTIONS:",
+    "- some existing assumption",
+    "",
+    "UNKNOWN:",
+    "- none",
+  ].join("\n");
+
+  it("is a no-op when there are no invalid citations", () => {
+    const r = downgradeUnverifiedCitations(goodText, new Set());
+    expect(r).toEqual({ text: goodText, downgradedCount: 0 });
+  });
+
+  it("moves a VERIFIED line with an invalid citation into ASSUMPTIONS", () => {
+    const r = downgradeUnverifiedCitations(goodText, new Set(["fake.ts:5"]));
+    expect(r.downgradedCount).toBe(1);
+    // the fabricated line is gone from the VERIFIED section specifically
+    const verifiedBlock = r.text.split("ASSUMPTIONS:")[0];
+    expect(verifiedBlock).not.toContain("fake.ts:5");
+    // it now appears right after the ASSUMPTIONS header, marked as auto-downgraded
+    expect(r.text).toMatch(/ASSUMPTIONS:\n- fake\.ts:5 — "made up" → this fact is fabricated 〔未検証の引用のため自動降格〕/);
+    // the grounded VERIFIED line is untouched
+    expect(r.text).toContain('- a.ts:1 — "real line" → this fact is grounded');
+    // the pre-existing assumption survives
+    expect(r.text).toContain("- some existing assumption");
+  });
+
+  it("downgrades multiple lines and preserves order relative to each other", () => {
+    const text = [
+      "VERIFIED:",
+      "- a.ts:1 — good one",
+      "- bad1.ts:1 — first fake",
+      "- bad2.ts:1 — second fake",
+      "ASSUMPTIONS:",
+      "- none",
+    ].join("\n");
+    const r = downgradeUnverifiedCitations(text, new Set(["bad1.ts:1", "bad2.ts:1"]));
+    expect(r.downgradedCount).toBe(2);
+    const assumptionsBlock = r.text.split("ASSUMPTIONS:")[1];
+    expect(assumptionsBlock.indexOf("bad1.ts:1")).toBeLessThan(assumptionsBlock.indexOf("bad2.ts:1"));
+  });
+
+  it("creates an ASSUMPTIONS section when the text has none", () => {
+    const text = ["VERIFIED:", "- fake.ts:1 — bogus fact"].join("\n");
+    const r = downgradeUnverifiedCitations(text, new Set(["fake.ts:1"]));
+    expect(r.downgradedCount).toBe(1);
+    expect(r.text).toContain("ASSUMPTIONS:");
+    expect(r.text).toContain("fake.ts:1");
+  });
+
+  it("does not downgrade a VERIFIED line whose citation is valid, even when other citations are invalid elsewhere", () => {
+    const r = downgradeUnverifiedCitations(goodText, new Set(["fake.ts:5"]));
+    expect(r.text).toContain('- a.ts:1 — "real line" → this fact is grounded');
+  });
+
+  it("does not touch ASSUMPTIONS/UNKNOWN lines even if they contain a matching citation key", () => {
+    const text = [
+      "VERIFIED:",
+      "- a.ts:1 — fine",
+      "ASSUMPTIONS:",
+      "- fake.ts:9 — already an assumption, not VERIFIED",
+    ].join("\n");
+    const before = text;
+    const r = downgradeUnverifiedCitations(text, new Set(["fake.ts:9"]));
+    expect(r.downgradedCount).toBe(0);
+    expect(r.text).toBe(before);
   });
 });

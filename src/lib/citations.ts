@@ -94,3 +94,72 @@ export async function validateCitations(
   }
   return { ok: invalid.length === 0, invalid };
 }
+
+// ── P9: gate investigation output on citation validity ──────────────────────
+// A header line ("VERIFIED" / "ASSUMPTIONS" / "UNKNOWN", optionally followed
+// by ":"/"：" and inline content) as produced by the INVESTIGATOR prompt in
+// reasoning.ts. Matched at line start only, so a bullet like "- ASSUMPTIONS
+// about X" (starting with "-") never mismatches as a header.
+const SECTION_HEADER = /^\s*(VERIFIED|ASSUMPTIONS|UNKNOWN)[:：]?\s*(.*)$/i;
+
+export interface DowngradeResult {
+  text: string;
+  /** Number of VERIFIED lines moved to ASSUMPTIONS. 0 → `text` is unchanged. */
+  downgradedCount: number;
+}
+
+/** Downgrade VERIFIED lines whose citation(s) failed validation to ASSUMPTIONS
+ * (deepthink-v3-roadmap P9): a plausible but fake `file:line` must not survive
+ * as VERIFIED, since the JUDGE only reads evidence TEXT and cannot itself
+ * detect a fabricated citation. Never deletes information — the fact moves,
+ * annotated, rather than vanishing. `invalidKeys` is the set of "path:line"
+ * strings that `validateCitations` flagged. Pure. */
+export function downgradeUnverifiedCitations(
+  text: string,
+  invalidKeys: ReadonlySet<string>,
+): DowngradeResult {
+  if (invalidKeys.size === 0) return { text, downgradedCount: 0 };
+
+  type Section = "VERIFIED" | "ASSUMPTIONS" | "UNKNOWN" | "OTHER";
+  interface ParsedLine {
+    section: Section;
+    text: string;
+    isHeader: boolean;
+  }
+  const parsed: ParsedLine[] = [];
+  let current: Section = "OTHER";
+  for (const raw of text.split(/\r?\n/)) {
+    const m = raw.match(SECTION_HEADER);
+    if (m) {
+      current = m[1].toUpperCase() as Section;
+      parsed.push({ section: current, text: raw, isHeader: true });
+      continue;
+    }
+    parsed.push({ section: current, text: raw, isHeader: false });
+  }
+
+  let downgradedCount = 0;
+  const downgradedLines: string[] = [];
+  const kept: ParsedLine[] = [];
+  for (const p of parsed) {
+    if (p.section === "VERIFIED" && !p.isHeader && p.text.trim() !== "") {
+      const bad = extractCitations(p.text).some((c) => invalidKeys.has(`${c.path}:${c.line}`));
+      if (bad) {
+        downgradedCount++;
+        downgradedLines.push(`${p.text.trim()} 〔未検証の引用のため自動降格〕`);
+        continue;
+      }
+    }
+    kept.push(p);
+  }
+  if (downgradedCount === 0) return { text, downgradedCount: 0 };
+
+  const outLines = kept.map((p) => p.text);
+  const assumeIdx = kept.findIndex((p) => p.isHeader && p.section === "ASSUMPTIONS");
+  if (assumeIdx >= 0) {
+    outLines.splice(assumeIdx + 1, 0, ...downgradedLines);
+  } else {
+    outLines.push("", "ASSUMPTIONS:", ...downgradedLines);
+  }
+  return { text: outLines.join("\n"), downgradedCount };
+}

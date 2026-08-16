@@ -27,6 +27,7 @@ import { buildRepoMap } from "./repoMap";
 import { recordDefects, defectReminder } from "./defectMemory";
 import { taskKeyFor, buildCachedFactsMessage, recordVerifiedFacts } from "./evidenceCache";
 import { recordModelRun } from "./modelLedger";
+import { extractCitations, validateCitations, downgradeUnverifiedCitations } from "./citations";
 
 /** Extract the current user question from the base messages (last user turn),
  * for scoping the evidence cache (P4) to this task. */
@@ -202,7 +203,9 @@ const INVESTIGATOR = (budget: number) =>
       `content already in this conversation, and you have a HARD budget of ${budget} tool turns — ` +
       "the moment you can answer, stop investigating and write the structured output.\n" +
       "Output in THIS exact structure so the evidence stays machine-usable downstream:\n" +
-      "VERIFIED: bullet facts each backed by a file:line citation (only things you actually confirmed).\n" +
+      'VERIFIED: bullet facts you actually confirmed, each written as `- path:line — "quoted excerpt" → ' +
+      "fact`, where the quoted excerpt is copied VERBATIM from the line you read (this makes the " +
+      "citation checkable by a program, not just plausible-looking).\n" +
       "ASSUMPTIONS: bullets you inferred but did NOT confirm (or 'none').\n" +
       "UNKNOWN: what you could not determine (or 'none').\n" +
       "Be dense, no filler, no restating the question. Never put an unconfirmed claim under VERIFIED.",
@@ -801,7 +804,7 @@ export async function runRecurrentReasoning(
 
     // ── Phase B — Investigation (cheap model, read-only, grounded) ──────────────
     const investigate = async (q: string, label: string): Promise<string> => {
-      const r = await think(
+      let r = await think(
         [
           ...base,
           ...briefMsgs,
@@ -815,6 +818,29 @@ export async function runRecurrentReasoning(
         // "sufficiency", which mislabeled their timings before.
         { readOnly: true, tag: "investigate" },
       );
+      // ── P9: deterministic citation gate ─────────────────────────────────────
+      // The JUDGE only ever sees evidence TEXT, so a plausible but fabricated
+      // `file:line` citation under VERIFIED sails through LLM judgment untouched
+      // (deepthink-v3-roadmap 欠陥F). Check every citation against the real
+      // files and downgrade any VERIFIED line whose citation doesn't resolve —
+      // this can only ADD defects, never grant a pass (that stays the strong
+      // JUDGE's exclusive call, per CLAUDE.md「判定器を安価モデルに下げない」).
+      if (opts.useTools && opts.workspaceRoot) {
+        const cites = extractCitations(r);
+        if (cites.length > 0) {
+          const { invalid } = await validateCitations(cites, readCitedFile);
+          if (invalid.length > 0) {
+            const invalidKeys = new Set(invalid.map((i) => `${i.path}:${i.line}`));
+            const { text, downgradedCount } = downgradeUnverifiedCitations(r, invalidKeys);
+            if (downgradedCount > 0) {
+              console.log(
+                `[deepthink] citations · "${label}" · ${downgradedCount}件を未検証としてASSUMPTIONSへ降格`,
+              );
+              r = text;
+            }
+          }
+        }
+      }
       cb.onThought(label, thinkingLabel, r);
       return `### 調査: ${q}\n${r}`;
     };
