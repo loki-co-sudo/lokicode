@@ -210,6 +210,53 @@ describe("runVerifyLoop advisor auto-consult", () => {
     expect(reports[0]).toContain("🛑");
   });
 
+  it("reports maxAttempts+1 (not maxAttempts) when exhausted after the advisor's bonus round changed the error", async () => {
+    // maxAttempts=2: attempt1 fails, attempt2 repeats it (stuck), advisor's
+    // bonus round produces a DIFFERENT error but attempt(2) >= maxAttempts(2)
+    // — 3 exec calls actually ran, so the report must say 3, not 2.
+    const { deps, reports } = makeDeps(
+      {
+        results: [
+          { code: 1, stderr: "FAIL expected 3 to be 4 (12ms)" },
+          { code: 1, stderr: "FAIL expected 7 to be 9 (48ms)" },
+          { code: 1, stderr: "error TS2304: Cannot find name 'bar'" },
+        ],
+      },
+      async () => "advice",
+    );
+    const out = await runVerifyLoop("npm test", 2, deps);
+    expect(out).toBe("exhausted");
+    expect(reports[reports.length - 1]).toContain("⚠️");
+    expect(reports[reports.length - 1]).toContain("3 回");
+    expect(reports[reports.length - 1]).not.toContain("2 回");
+  });
+
+  it("does not consult the advisor when aborted right at the stuck moment", async () => {
+    const advisorCalls: AdvisorStuckContext[] = [];
+    const { deps } = makeDeps(
+      {
+        results: [
+          { code: 1, stderr: "FAIL expected 3 to be 4 (12ms)" },
+          { code: 1, stderr: "FAIL expected 7 to be 9 (48ms)" },
+        ],
+      },
+      async (ctx) => {
+        advisorCalls.push(ctx);
+        return "advice";
+      },
+    );
+    // aborted() is checked 3 times before the consult gate (top of attempt 1,
+    // pre-fix after attempt 1, top of attempt 2) — stay false through those,
+    // then trip true exactly at the consult gate.
+    let calls = 0;
+    const out = await runVerifyLoop("npm test", 5, {
+      ...deps,
+      aborted: () => ++calls > 3,
+    });
+    expect(out).toBe("aborted");
+    expect(advisorCalls).toHaveLength(0);
+  });
+
   it("never consults when consultAdvisor is not provided (default OFF)", async () => {
     const { deps, reports } = makeDeps({
       results: [

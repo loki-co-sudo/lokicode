@@ -686,4 +686,19 @@ mod tests {
         assert_eq!(u.total_tokens, 0);
         assert_eq!(u.cost, 0.0);
     }
+
+    /// A config file written before `advisor_model` existed must still
+    /// deserialize — `load_settings` swallows a parse error into
+    /// `Settings::default()`, which would silently wipe the user's saved API
+    /// key/model/base_url. `Option<T>` fields default to `None` when absent
+    /// from the JSON, so this should already hold; this test makes that an
+    /// explicit, checked guarantee rather than an assumption.
+    #[test]
+    fn legacy_config_without_advisor_model_loads() {
+        let json = r#"{"api_key":"sk-x","model":"m","thinking_model":"t","synthesis_model":"s","base_url":""}"#;
+        let cfg: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.api_key.as_deref(), Some("sk-x"));
+        assert_eq!(cfg.thinking_model.as_deref(), Some("t"));
+        assert!(cfg.advisor_model.is_none());
+    }
 }

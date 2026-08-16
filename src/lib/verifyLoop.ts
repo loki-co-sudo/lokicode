@@ -112,6 +112,7 @@ export async function runVerifyLoop(
     // more attempts on it.
     if (prevSig !== null && r.sig === prevSig) {
       if (deps.consultAdvisor && !advisorConsulted) {
+        if (deps.aborted?.()) return "aborted";
         advisorConsulted = true;
         const advice = await deps.consultAdvisor({ log: r.log, attempt, maxAttempts });
         if (advice) {
@@ -149,8 +150,11 @@ export async function runVerifyLoop(
           // back into normal bookkeeping and keep going.
           prevSig = advised.sig;
           if (attempt >= maxAttempts) {
+            // The advisor's bonus round ran outside the attempt count (see the
+            // comment above `runOneAttempt`'s call), so `maxAttempts + 1`
+            // attempts actually ran here, not `maxAttempts` — say so.
             deps.report(
-              `⚠️ 検証コマンドが ${maxAttempts} 回試しても失敗しました。残っている問題は上のエラーログのとおりです。手動で確認してください。`,
+              `⚠️ 検証コマンドが ${maxAttempts + 1} 回試しても失敗しました（アドバイザー相談後の1回を含む）。残っている問題は上のエラーログのとおりです。手動で確認してください。`,
             );
             return "exhausted";
           }
