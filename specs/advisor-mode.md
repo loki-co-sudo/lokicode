@@ -11,7 +11,7 @@
   - Agent モード（非ディープシンク）: `agentOpts.advisorModel`（経路B advertise、トグルとは独立）と `runVerifyLoop` の `consultAdvisor`（経路A、`advisorAuto && advisorModel` でゲート、`text`＝元のユーザー依頼を含めてクロージャ構築）を配線。
   - ディープシンク実行フェーズ: `ReasoningOptions` に `advisorModel`/`advisorAuto` を追加し、`execOpts`（経路B advertise、`think()` の分析フェーズには渡さない）と P10 の `runVerifyLoop`（経路A、`briefText`＝GOAL/CRITERIA/CONSTRAINTS を元のタスクとしてクロージャに含める）へ配線。`onAdvisorConsult` コールバックで発火有無を `advisorConsultRef` に記録し、`ChatPane.tsx` の事後校正 `structuralCalls` 呼び出しに実引数として渡す（`execReview` と同型）。
   - `npm test`/`npm run build`/`cargo clippy` すべて通過。**UIの目視確認は未実施**——`npm run dev`（ブラウザのみ）は `App.tsx:391` の `getCurrentWindow()` がTauri IPCなしでは動かず、今回の変更と無関係に既存からアプリシェルの時点でエラーになる（ErrorBoundaryで確認・スタックトレースがTauriのwebview APIを指しコード側の原因ではないことを確認済み）。`npm run tauri dev`（要Rustビルド・GUIウィンドウ）はこの環境のブラウザ自動化ツールでは接続できないため未実施。
-- ⬜ 有料実走による効果計測（advisorの助言が実際に詰まりから復帰させたか）は未実施——§6参照。実施するかはひろに確認する。
+- ✅ 有料実走を一部実施（§6「有料実走の実施結果」参照）。経路B（明示呼び出し）は本番コードパスで実際に動作確認済み。経路A（自動相談の実効果）は詰まりの再現自体に失敗し、依然として未計測。
 
 ## 0. 動機
 
@@ -183,6 +183,15 @@ UI: 思考モデル・合成モデルのピッカーの並びに「アドバイ�
 - `agent.test.ts`: `opts.advisorModel` の有無で `CONSULT_ADVISOR_TOOL` が advertise される/されないことを確認。
 - `cost.test.ts`: `advisorConsult` フラグの有無で `pipelineShape`/`structuralCalls` が変わることを確認（P10 の `execPath`/`execReview` テストと同じ形）。
 - 有料実走（advisorの助言が実際に有用か・詰まりから復帰できるか）は本skillの計測方針どおり**別途ユーザーの実施可否確認を得てから** `e2e/harness` にタスクを追加するか検討する（未計測のまま「効果あり」と主張しない）。
+
+### 有料実走の実施結果（一次計測、v1.12.0リリース直後・使い捨てスクリプトで実施・`e2e/harness` には未統合）
+
+ひろの許可を得て2本の一次計測を実施した（スクリプト自体はコミットしていない・使い捨て）:
+
+1. **経路A（自動相談）の詰まり再現テスト**: 浮動小数点丸めバグを題材に baseline（advisor OFF）と advisor-ON を実施。**結果: 両方とも1回目の修正で `deepseek/deepseek-v4-flash-0731` が正解し、詰まり自体が発生しなかった**（consultAdvisorは一度も呼ばれず）。題材が思考モデルにとって簡単すぎたための設計不足で、advisorの実効果（詰まりからの復帰率）については**依然として未計測**。詰まりを意図的に・確実に再現させるのは本質的に難しく、単発実行では統計的な結論を出せない（CLAUDE.md方針どおり）。
+2. **経路B（consult_advisorツールの明示呼び出し）の疎通テスト**: `runAgent` に「consult_advisorを呼んでから結果をそのまま返して」という指示を与え、`advisorModel: "anthropic/claude-opus-5"` を設定して実行。**結果: ツールが実際に呼ばれ、`agent.ts` の本番コードパス経由で Claude Opus 5 から具体的で技術的に正確な回答（2722文字、JS浮動小数点丸めの落とし穴と4つの回避策）が返ってきた**。コスト $0.0415（1回）。この経路の配線（ツール advertise → ハンドリング → `complete()` → 実API）が実際に機能することは確認できた。
+
+**結論**: 経路B（明示呼び出し）の配線は実測で動作確認済み。経路A（自動相談）は仕組み自体はユニットテスト済みだが、「実際に詰まりから復帰させる効果」は有料実走でも再現できておらず未計測のまま。今後もし計測するなら、単発ではなく複数回・複数の詰まりやすいお題での統計的な検証が必要（1回勝負では信号にならない）。
 
 ## 7. 実装順（着手時の目安）
 
