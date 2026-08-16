@@ -32,6 +32,7 @@ import { recordModelRun } from "./modelLedger";
 import { extractCitations, validateCitations, downgradeUnverifiedCitations } from "./citations";
 import { compactEvidence } from "./evidence";
 import { assignAngles, distillPastAttempts } from "./proposer";
+import { parseJudgment, focusDefects, type Judgment } from "./judgment";
 
 /** Extract the current user question from the base messages (last user turn),
  * for scoping the evidence cache (P4) to this task. */
@@ -137,11 +138,11 @@ export function pickBestBranch(scores: number[]): number {
 }
 
 const MAX_EVIDENCE_CHARS = 9000;
-/** Fallback verifier pass mark when no effort preset applies (parse fallback). */
-const PASS_SCORE = 85;
 // The verifier pass mark, escalation threshold, ensemble width and sufficiency
 // rounds are user-tunable via the effort preset (speed/balanced/quality) — see
-// lib/agentSettings.ts EFFORT_PARAMS and specs/effort-presets.md.
+// lib/agentSettings.ts EFFORT_PARAMS and specs/effort-presets.md. (The parse-
+// fallback pass mark used only when the JUDGE's JSON is unparseable lives in
+// lib/judgment.ts as FALLBACK_PASS_SCORE.)
 
 function clampDepth(d: number): number {
   return Math.max(1, Math.min(MAX_DEPTH, Math.floor(d)));
@@ -243,26 +244,48 @@ const DRAFT_PLAIN = usr(
 );
 
 // LLM-as-judge: scores the draft against a rubric and lists concrete defects.
-// Runs as a plain completion (no tools) so the output is clean, parseable JSON.
-const JUDGE = usr(
-  "You are a strict evaluator. Judge the candidate answer above against the user's task, the " +
-    "stated GOAL/CRITERIA, and the gathered evidence. Score 0-100 with this rubric: " +
-    "fit to GOAL & CRITERIA 35 (an answer that ignores the task-specific CRITERIA — e.g., wrong " +
-    "audience, framing, or format — is a major defect EVEN IF technically correct; violating any " +
-    "stated CONSTRAINT is a CRITICAL defect), " +
-    "factual grounding & correctness 35 (every concrete claim must be supported by the evidence; " +
-    "any unsupported, evidence-contradicting, or internally inconsistent claim is a CRITICAL " +
-    "defect that caps the score at 50 — this explicitly includes invented specific numbers/" +
-    "counts/versions, citing function/file/library names that do not appear in the evidence " +
-    "(treat any code identifier, function name, or library name not seen in the gathered evidence " +
-    "as unverified and a defect), and describing a tool or feature as doing something its " +
-    "implementation does not; a claim asserted as fact that the evidence only lists under " +
-    "ASSUMPTIONS or UNKNOWN — rather than VERIFIED — is such a defect), " +
-    "depth/insight appropriate to the audience 20, " +
-    "specificity & citations 10. " +
-    'Output ONLY minified JSON: {"score": <int 0-100>, "defects": ["concrete issue, most ' +
-    'important first", ...]} — use [] when there are no material defects.',
-);
+// Runs as a plain completion (no tools) so the output is clean, parseable
+// JSON. P13: when the brief has parsed CRITERIA, score each one independently
+// (0-10) instead of a single 0-100 number — this gives REFINE a focus signal
+// (lib/judgment.ts's `focusDefects`) and lets `judgeSamples>=2` merge by
+// criterion instead of only ever taking a single overall min(). Falls back to
+// the old single-score rubric when there is no parsed CRITERIA (rare — the
+// brief's parse failed) so the judge still has something concrete to score.
+const JUDGE = (criteria: string[]) =>
+  usr(
+    "You are a strict evaluator. Judge the candidate answer above against the user's task, the " +
+      "stated GOAL/CRITERIA, and the gathered evidence.\n" +
+      (criteria.length > 0
+        ? "Score EACH of the following CRITERIA independently on a 0-10 scale (0 = totally fails " +
+          "this criterion, 10 = fully satisfies it):\n" +
+          criteria.map((c, i) => `c${i + 1}: ${c}`).join("\n") +
+          "\n\nRegardless of which criterion it relates to, mark a defect critical:true when it is: " +
+          "a violation of any stated CONSTRAINT; an unsupported, evidence-contradicting, or " +
+          "internally inconsistent factual claim (this explicitly includes invented specific " +
+          "numbers/counts/versions, and citing a function/file/library name not seen in the gathered " +
+          "evidence — treat any code identifier not seen in the evidence as unverified); or a claim " +
+          "asserted as fact that the evidence only lists under ASSUMPTIONS or UNKNOWN rather than " +
+          "VERIFIED.\n" +
+          'Output ONLY minified JSON: {"scores": {"c1": <int 0-10>, ...}, "defects": [{"criterion": ' +
+          '"c1", "issue": "concrete issue", "critical": <true|false>}, ...]} — defects=[] when there ' +
+          "are none, and include a `scores` entry for EVERY criterion listed above."
+        : "Score 0-100 with this rubric: " +
+          "fit to GOAL & CRITERIA 35 (an answer that ignores the task-specific CRITERIA — e.g., wrong " +
+          "audience, framing, or format — is a major defect EVEN IF technically correct; violating any " +
+          "stated CONSTRAINT is a CRITICAL defect), " +
+          "factual grounding & correctness 35 (every concrete claim must be supported by the evidence; " +
+          "any unsupported, evidence-contradicting, or internally inconsistent claim is a CRITICAL " +
+          "defect that caps the score at 50 — this explicitly includes invented specific numbers/" +
+          "counts/versions, citing function/file/library names that do not appear in the evidence " +
+          "(treat any code identifier, function name, or library name not seen in the gathered evidence " +
+          "as unverified and a defect), and describing a tool or feature as doing something its " +
+          "implementation does not; a claim asserted as fact that the evidence only lists under " +
+          "ASSUMPTIONS or UNKNOWN — rather than VERIFIED — is such a defect), " +
+          "depth/insight appropriate to the audience 20, " +
+          "specificity & citations 10.\n" +
+          'Output ONLY minified JSON: {"score": <int 0-100>, "defects": ["concrete issue, most ' +
+          'important first", ...]} — use [] when there are no material defects.'),
+  );
 
 const REFINE = (defects: string[], useTools: boolean) =>
   usr(
@@ -390,27 +413,6 @@ const SELECT = usr(
     NO_FALSE_ACTIONS,
 );
 
-/** Parse the judge's JSON verdict; tolerant of stray prose around the JSON. */
-function parseJudgment(text: string): { score: number; defects: string[] } {
-  const m = text.match(/\{[\s\S]*\}/);
-  if (m) {
-    try {
-      const o = JSON.parse(m[0]) as { score?: unknown; defects?: unknown };
-      const score = Math.max(0, Math.min(100, Math.round(Number(o.score))));
-      const defects = Array.isArray(o.defects) ? o.defects.map(String).filter(Boolean) : [];
-      if (Number.isFinite(score)) return { score, defects };
-    } catch {
-      /* fall through to heuristic */
-    }
-  }
-  const sm = text.match(/score[^0-9]*(\d{1,3})/i);
-  const score = sm ? Math.max(0, Math.min(100, Number(sm[1]))) : 60;
-  if (score >= PASS_SCORE) return { score, defects: [] };
-  // Parse failed but score is low: pass the raw verdict as the defect so REFINE
-  // has real guidance instead of a generic "couldn't parse" placeholder.
-  const raw = text.trim().slice(0, 1500);
-  return { score, defects: [raw || "（評価の解析に失敗。改善を継続）"] };
-}
 
 export function parseBrief(
   text: string,
@@ -1126,12 +1128,12 @@ export async function runRecurrentReasoning(
       // defect lists are merged. See specs/router-effort-link.md §3.
       const verdicts = await Promise.all(
         Array.from({ length: Math.max(1, effort.judgeSamples) }, () =>
-          think([...base, ...ctx, { role: "assistant", content: draft }, JUDGE], synthesis, {
+          think([...base, ...ctx, { role: "assistant", content: draft }, JUDGE(brief.criteria)], synthesis, {
             tools: false,
           }),
         ),
       );
-      const parsed = verdicts.map(parseJudgment);
+      const parsed: Judgment[] = verdicts.map(parseJudgment);
       const score = Math.min(...parsed.map((p) => p.score));
       lastVerifyScore = score; // P7: the run's quality signal (last judged score)
       const defects = [...new Set(parsed.flatMap((p) => p.defects))];
@@ -1150,11 +1152,16 @@ export async function runRecurrentReasoning(
       consecutiveLow = escalate ? consecutiveLow + 1 : 0;
 
       // P12 §2: distill EARLIER rounds' defects (not this round's — those are
-      // already passed via REFINE(defects,...)) into a "past attempt" note.
+      // already passed via REFINE(focused,...)) into a "past attempt" note.
       // Framed per CLAUDE.md's re-injection safety rule so proper nouns/
       // numbers inside it are never mistaken for this task's current facts.
       const distillText = pdrEnabled ? distillPastAttempts(pastRoundDefectLists) : "";
       const distillMsgs: ApiMessage[] = distillText ? [sys(distillText)] : [];
+
+      // P13 §2: focus REFINE on the lowest-scoring criterion only (sharper
+      // instruction than "fix everything", fewer input tokens). Falls back to
+      // the full `defects` list when there's no per-criterion breakdown.
+      const focused = focusDefects(parsed, defects);
 
       // ── P6 — Defect-guided beam: linear refine is stuck (2nd sub-escalation
       // score in a row). Branch BEAM_WIDTH refine candidates in parallel and keep
@@ -1171,7 +1178,7 @@ export async function runRecurrentReasoning(
                 ...ctx,
                 ...distillMsgs,
                 { role: "assistant", content: draft },
-                REFINE(defects, opts.useTools),
+                REFINE(focused, opts.useTools),
               ],
               synthesis,
               { readOnly: true },
@@ -1181,7 +1188,7 @@ export async function runRecurrentReasoning(
         if (aborted()) return;
         const branchScores = await Promise.all(
           branches.map((b) =>
-            think([...base, ...ctx, { role: "assistant", content: b }, JUDGE], synthesis, {
+            think([...base, ...ctx, { role: "assistant", content: b }, JUDGE(brief.criteria)], synthesis, {
               tools: false,
             }).then((v) => parseJudgment(v).score),
           ),
@@ -1206,7 +1213,7 @@ export async function runRecurrentReasoning(
           ...ctx,
           ...distillMsgs,
           { role: "assistant", content: draft },
-          REFINE(defects, opts.useTools),
+          REFINE(focused, opts.useTools),
         ],
         refineModel,
         { readOnly: true },
