@@ -6,8 +6,8 @@
 - ✅ §1 経路A（`verifyLoop.ts` の自動相談ロジック）— 実装・テスト（7ケース）・`npm test`/`npm run build` 通過済み。自分の advisor ツールによる設計レビューで3点訂正（§1 内に記録）。
 - ✅ §4 コスト整合（`cost.ts` の `PipelineShape.advisorConsult`）— 実装・テスト（6ケース）・`npm test`/`npm run build` 通過済み。`execReview` と同じ非対称ルール（事前概算は発火を仮定しない）を踏襲。`ChatPane.tsx` の `structuralCalls` 呼び出しへの `advisorConsult` 実引数配線は §3（`reasoning.ts`/`ChatPane.tsx` の実行フェーズ配線）とセットで行う——それまでは省略時解釈の `false` のままで安全（advisorConsult 自体がまだどこからも発火しない）。
 - ✅ §1 経路B（`consult_advisor` ツール、`agent.ts`）— 実装・テスト（5ケース、`advertisedTools` を純関数として切り出して直接検証）・`npm test`/`npm run build` 通過済み。`AgentOptions.advisorModel` はまだどこからも渡されないため（§2/§3が未着手）、現時点ではツールは常に非advertise＝挙動変化なし。
-- ⬜ §2 設定の永続化（`openrouter.rs`/`openrouter.ts`）— 未着手。
-- ⬜ §3 スレッド先（`ChatPane.tsx`/`reasoning.ts`）— 未着手。
+- ✅ §2 設定の永続化（`openrouter.rs`/`openrouter.ts`）— `Settings`/`SettingsStatus`/`save_settings` に `advisor_model`/`advisorModel` を追加（`thinking_model`/`synthesis_model` と同一パターン）。`npm test`/`npm run build`/`cargo clippy` 通過済み。UI（ピッカー・トグル）はまだ無いため、設定画面からはまだ入力できない——§5（`SettingsPane.tsx`/`ChatPane.tsx`）で配線する。
+- ⬜ §3 スレッド先（`ChatPane.tsx`/`reasoning.ts`）— 未着手（UIピッカー・自動相談トグル・`AgentOptions.advisorModel`/`ReasoningOptions.advisorModel` の配線を含む）。
 
 ## 0. 動機
 

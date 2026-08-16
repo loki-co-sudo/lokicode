@@ -100,6 +100,9 @@ struct Settings {
     thinking_model: Option<String>,
     /// High-performance model used for the final synthesis phase.
     synthesis_model: Option<String>,
+    /// Optional stronger model consulted for advisor-mode (specs/advisor-mode.md):
+    /// stuck-detection auto-consult and the explicit consult_advisor tool.
+    advisor_model: Option<String>,
     /// OpenAI-compatible API base URL (e.g. Ollama: http://localhost:11434/v1).
     /// Empty/unset → OpenRouter.
     base_url: Option<String>,
@@ -193,6 +196,8 @@ pub struct SettingsStatus {
     /// Empty string if unset (falls back to `model`).
     pub thinking_model: String,
     pub synthesis_model: String,
+    /// Empty string if unset (advisor-mode is unavailable until configured).
+    pub advisor_model: String,
     /// Configured API base URL (empty = OpenRouter default).
     pub base_url: String,
 }
@@ -214,6 +219,7 @@ pub fn get_settings(app: AppHandle) -> SettingsStatus {
         key_source: key_source.to_string(),
         thinking_model: cfg.thinking_model.unwrap_or_default(),
         synthesis_model: cfg.synthesis_model.unwrap_or_default(),
+        advisor_model: cfg.advisor_model.unwrap_or_default(),
         base_url: cfg.base_url.unwrap_or_default(),
     }
 }
@@ -225,6 +231,7 @@ pub fn save_settings(
     model: Option<String>,
     thinking_model: Option<String>,
     synthesis_model: Option<String>,
+    advisor_model: Option<String>,
     base_url: Option<String>,
 ) -> Result<(), String> {
     let mut cfg = load_settings(&app);
@@ -239,6 +246,9 @@ pub fn save_settings(
     }
     if let Some(m) = synthesis_model {
         cfg.synthesis_model = if m.trim().is_empty() { None } else { Some(m) };
+    }
+    if let Some(m) = advisor_model {
+        cfg.advisor_model = if m.trim().is_empty() { None } else { Some(m) };
     }
     if let Some(b) = base_url {
         cfg.base_url = if b.trim().is_empty() { None } else { Some(b) };

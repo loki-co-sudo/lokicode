@@ -99,6 +99,10 @@ export interface SettingsStatus {
   keySource: "config" | "env" | "none";
   thinkingModel: string;
   synthesisModel: string;
+  /** Optional stronger model for advisor-mode (specs/advisor-mode.md). Empty
+   * string when unset — advisor auto-consult and the consult_advisor tool are
+   * both unavailable until this is configured. */
+  advisorModel: string;
   baseUrl: string;
 }
 
@@ -147,6 +151,7 @@ export function saveSettings(opts: {
   model?: string;
   thinkingModel?: string;
   synthesisModel?: string;
+  advisorModel?: string;
   baseUrl?: string;
 }): Promise<void> {
   return invoke("save_settings", {
@@ -154,6 +159,7 @@ export function saveSettings(opts: {
     model: opts.model ?? null,
     thinkingModel: opts.thinkingModel ?? null,
     synthesisModel: opts.synthesisModel ?? null,
+    advisorModel: opts.advisorModel ?? null,
     baseUrl: opts.baseUrl ?? null,
   });
 }
