@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { chatOnceStream, type ApiMessage, type Usage } from "./openrouter";
 import { getMaxIterations, getCommandTimeout, getRestrictToWorkspace } from "./agentSettings";
+import { shouldCompact, compactToolResults } from "./agentCompaction";
 
 export type ToolStatus = "running" | "done" | "error" | "denied";
 
@@ -644,6 +645,21 @@ export async function runAgent(
 
       cb.onToolEnd(status, result);
       conv.push({ role: "tool", tool_call_id: call.id, content: result });
+    }
+
+    // ── P11 §4: compact old tool results once the run has gone long ─────────
+    // Every iteration resends the FULL conversation, so on a long run old tool
+    // results dominate cost/latency for no benefit (the model rarely needs a
+    // read from 40 turns ago verbatim). Only fires past COMPACT_THRESHOLD
+    // iterations — short runs are untouched — and only rewrites `content` on
+    // existing tool messages in place (see agentCompaction.ts's two absolute
+    // conditions: pairing preserved, content never emptied).
+    if (shouldCompact(i + 1)) {
+      const { conv: compacted, compactedCount } = compactToolResults(conv);
+      if (compactedCount > 0) {
+        conv.splice(0, conv.length, ...compacted);
+        console.log(`[${trace}] compacted ${compactedCount} old tool result(s)`);
+      }
     }
   }
 
