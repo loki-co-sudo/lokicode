@@ -37,6 +37,54 @@ interface OrUsage {
   cost?: number;
 }
 
+// A single upstream request has been observed to hang indefinitely (no
+// response, no error — just a dangling connection) with no client-side
+// timeout to fall back on. 3 minutes is generous relative to every observed
+// real (non-hung) call in this harness (the slowest legitimate call so far
+// was ~255s on a free model under heavy tool-call load) while still failing
+// a genuine hang fast enough for the retry in `openrouter()` to matter.
+const REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
+
+/** One raw attempt at the OpenRouter call. Throws (a) on a non-2xx response,
+ * (b) when the 200 response has no usable `choices[0]` — free/multi-
+ * provider-routed models occasionally return a malformed/empty body from one
+ * upstream provider even on 200, and that must not be treated as success —
+ * or (c) when the request hangs past REQUEST_TIMEOUT_MS with no response. */
+async function openrouterOnce(
+  body: Record<string, unknown>,
+): Promise<{ message: Record<string, unknown>; usage: OrUsage }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey()}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error(`OpenRouter request timed out after ${REQUEST_TIMEOUT_MS / 1000}s (no response)`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const raw = await res.text();
+  let json: { choices?: { message: Record<string, unknown> }[]; usage?: OrUsage; error?: unknown };
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error(`OpenRouter 200 with unparseable body: ${raw.slice(0, 300)}`);
+  }
+  if (!json.choices || json.choices.length === 0 || !json.choices[0]?.message) {
+    throw new Error(`OpenRouter 200 with no usable choices: ${JSON.stringify(json).slice(0, 300)}`);
+  }
+  return { message: json.choices[0].message, usage: json.usage ?? {} };
+}
+
 async function openrouter(
   messages: unknown[],
   model: string | null,
@@ -49,18 +97,17 @@ async function openrouter(
   };
   if (tools && (tools as unknown[]).length > 0) body.tools = tools;
   const t0 = Date.now();
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey()}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const json = (await res.json()) as {
-    choices: { message: Record<string, unknown> }[];
-    usage?: OrUsage;
-  };
-  const msg = json.choices[0].message;
-  const usage = json.usage ?? {};
+  // Free/multi-provider-routed models occasionally hand back a malformed 200
+  // from one upstream — one retry absorbs that without masking a real failure
+  // (a second consecutive bad response still throws).
+  let attempt: { message: Record<string, unknown>; usage: OrUsage };
+  try {
+    attempt = await openrouterOnce(body);
+  } catch (e) {
+    console.warn(`  [api] transient failure, retrying once: ${e instanceof Error ? e.message : e}`);
+    attempt = await openrouterOnce(body);
+  }
+  const { message: msg, usage } = attempt;
   const msgs = messages as { content?: unknown }[];
   const last = String(msgs[msgs.length - 1]?.content ?? "").replace(/\s+/g, " ");
   const entry: CallLogEntry = {
@@ -131,7 +178,23 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
         args.messages as unknown[],
         (args.model as string) ?? null,
       );
-      return { content: String(message.content ?? ""), usage: toUsage(usage) } as T;
+      // Some reasoning models (DeepSeek series among them) leave `content`
+      // empty and put the actual text in `reasoning_content` / `reasoning`
+      // instead — mirrors the Rust backend's `complete()` fallback exactly
+      // (src-tauri/src/openrouter.rs) so the harness's non-streaming "complete"
+      // path (classify/brief/judge/sufficiency/refine) sees the same content
+      // the real app would, instead of a spurious "empty phase output" error.
+      // NOT applied to chat_once_stream below — the real streaming path has no
+      // such fallback either, and an empty content there is normal alongside
+      // tool_calls.
+      let content = String(message.content ?? "");
+      if (!content.trim()) {
+        const fallback = ["reasoning_content", "reasoning"]
+          .map((k) => message[k])
+          .find((v): v is string => typeof v === "string" && v.trim().length > 0);
+        if (fallback) content = fallback;
+      }
+      return { content, usage: toUsage(usage) } as T;
     }
     case "chat_once_stream": {
       const { message, usage } = await openrouter(
