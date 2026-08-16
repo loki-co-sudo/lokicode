@@ -7,7 +7,7 @@
 - ✅ §4 コスト整合（`cost.ts` の `PipelineShape.advisorConsult`）— 実装・テスト（6ケース）・`npm test`/`npm run build` 通過済み。`execReview` と同じ非対称ルール（事前概算は発火を仮定しない）を踏襲。`ChatPane.tsx` の `structuralCalls` 呼び出しへの `advisorConsult` 実引数配線は §3（`reasoning.ts`/`ChatPane.tsx` の実行フェーズ配線）とセットで行う——それまでは省略時解釈の `false` のままで安全（advisorConsult 自体がまだどこからも発火しない）。
 - ✅ §1 経路B（`consult_advisor` ツール、`agent.ts`）— 実装・テスト（5ケース、`advertisedTools` を純関数として切り出して直接検証）・`npm test`/`npm run build` 通過済み。`AgentOptions.advisorModel` はまだどこからも渡されないため（§2/§3が未着手）、現時点ではツールは常に非advertise＝挙動変化なし。
 - ✅ §2 設定の永続化（`openrouter.rs`/`openrouter.ts`）— `Settings`/`SettingsStatus`/`save_settings` に `advisor_model`/`advisorModel` を追加（`thinking_model`/`synthesis_model` と同一パターン）。`npm test`/`npm run build`/`cargo clippy` 通過済み。UI（ピッカー・トグル）はまだ無いため、設定画面からはまだ入力できない——§5（`SettingsPane.tsx`/`ChatPane.tsx`）で配線する。
-- ⬜ §3 スレッド先（`ChatPane.tsx`/`reasoning.ts`）— 未着手（UIピッカー・自動相談トグル・`AgentOptions.advisorModel`/`ReasoningOptions.advisorModel` の配線を含む）。
+- ✅ §3 スレッド先（一部）: `SettingsPane.tsx` にアドバイザーモデルのピッカー、`ChatPane.tsx` に「アドバイザー自動相談」トグル（既定OFF・`lokicode.advisorAuto`）を追加。Agent モード（非ディープシンク）の `agentOpts.advisorModel`（経路B advertise）と `runVerifyLoop` の `consultAdvisor`（経路A、`text`＝元のユーザー依頼を含めてクロージャ構築）を配線済み。`npm test`/`npm run build` 通過。**UIの目視確認は未実施**——`npm run dev`（ブラウザのみ）は `App.tsx:391` の `getCurrentWindow()` がTauri IPCなしでは動かず、今回の変更と無関係に既存からアプリシェルの時点でエラーになる（ErrorBoundaryで確認・スタックトレースがTauriのwebview APIを指しコード側の原因ではないことを確認済み）。`npm run tauri dev`（要Rustビルド・GUIウィンドウ）はこの環境のブラウザ自動化ツールでは接続できないため未実施。ディープシンク側（実行フェーズへの配線・`reasoning.ts`）は次のステップで未着手。
 
 ## 0. 動機
 

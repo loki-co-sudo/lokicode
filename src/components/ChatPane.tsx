@@ -33,7 +33,7 @@ import {
 import { classifyTask } from "../lib/router";
 import { getPlatformInfo, type PlatformInfo } from "../lib/platform";
 import { LOOP_MAX_ATTEMPTS } from "../lib/loop";
-import { runVerifyLoop } from "../lib/verifyLoop";
+import { runVerifyLoop, type AdvisorStuckContext } from "../lib/verifyLoop";
 import { assessDeepThinkReadiness, estimateEffectiveLevel } from "../lib/modelGate";
 import {
   runAgent,
@@ -449,6 +449,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   const [modelConfigured, setModelConfigured] = useState(true);
   const [thinkingModel, setThinkingModel] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("");
+  const [advisorModel, setAdvisorModel] = useState("");
+  // Advisor auto-consult (specs/advisor-mode.md §1 経路A): OFF by default —
+  // only a user who explicitly opts in pays for it (CLAUDE.md 原則1).
+  const [advisorAuto, setAdvisorAuto] = usePersistentBool("lokicode.advisorAuto", false);
   const [includeFile, setIncludeFile] = usePersistentBool("lokicode.includeFile", false);
   const [agentMode, setAgentMode] = usePersistentBool("lokicode.agentMode", true);
   const [approvalLevel, setApprovalLevel] = usePersistentString(
@@ -638,6 +642,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         setModelConfigured(s.modelConfigured);
         setThinkingModel(s.thinkingModel);
         setSynthesisModel(s.synthesisModel);
+        setAdvisorModel(s.advisorModel);
       })
       .catch(() => {});
   }, [settingsVersion]);
@@ -957,6 +962,44 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       }
     }
 
+    // Advisor auto-consult (specs/advisor-mode.md §1 経路A). Only built when
+    // both the toggle and the model are set; `runVerifyLoop` uses its mere
+    // presence (vs undefined) as the auto-consult gate. Includes the original
+    // user request (`text`) alongside the failure log — a bare error with no
+    // task context produces generic advice (advisor design review finding).
+    const consultAdvisor =
+      advisorAuto && advisorModel
+        ? async (ctx: AdvisorStuckContext): Promise<string | null> => {
+            try {
+              const { content, usage } = await complete(
+                [
+                  {
+                    role: "system",
+                    content:
+                      "You are a senior advisor being consulted by another AI agent that is stuck " +
+                      "fixing a failing verification command. Answer concisely and concretely — " +
+                      "actionable guidance, not a restatement of the question.",
+                  },
+                  {
+                    role: "user",
+                    content:
+                      `元のユーザー依頼:\n${text}\n\n` +
+                      `検証コマンドが試行 ${ctx.attempt}/${ctx.maxAttempts} で同じエラーを2回連続で出し、詰まっています。\n\n` +
+                      `エラーログ:\n${ctx.log}\n\n` +
+                      `原因の見立てと、次に試すべき具体的な一手を教えてください。`,
+                  },
+                ],
+                advisorModel,
+                runId,
+              );
+              addUsage(usage);
+              return content || null;
+            } catch {
+              return null;
+            }
+          }
+        : undefined;
+
     try {
       if (useDeep) {
         await runRecurrentReasoning(
@@ -1031,6 +1074,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
           workspaceRoot: workspaceRoot ?? undefined,
           allowAskUser: true,
           cancelId: runId,
+          // consult_advisor tool (経路B): advertised whenever a model is
+          // configured, independent of the advisorAuto toggle (経路A) — see
+          // advisor-mode.md §2.
+          advisorModel: advisorModel || undefined,
         };
         let finalAnswer = await runAgent(base, agentCb, agentOpts);
 
@@ -1096,6 +1143,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onCommandEnd: (ok, log) => updateLastTool(ok ? "done" : "error", log),
             report: (m) => appendItem({ kind: "assistant", content: m }),
             aborted: () => signal.aborted,
+            consultAdvisor,
           });
         }
       } else {
@@ -1629,6 +1677,20 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               accent="bg-rose-500"
               label="ループ"
               title="変更→検証→修正を、設定の「検証コマンド」（例 npm test）が通るまで自動で繰り返します（最大5回）。成功時は通過した出力を証拠として表示。同じエラーが2回連続なら手詰まりとして即停止し、別コンテキストでの修復を促します。⚠️ 失敗のたびに Agent 実行1周ぶんの API コストがかかります。検証コマンド未設定時は動作しません。"
+            />
+          )}
+          {agentMode && (
+            <Toggle
+              checked={advisorAuto}
+              onChange={setAdvisorAuto}
+              accent="bg-teal-500"
+              label="アドバイザー自動相談"
+              disabled={!advisorModel}
+              title={
+                advisorModel
+                  ? "検証ループが同じエラーで2回連続で詰まったとき、設定のアドバイザーモデルに一度だけ相談し、その助言をもとにもう一度だけ検証を試します（合否判定はしません）。詰まりが1ループにつき最大1回起きたときだけ発火する追加コストです。"
+                  : "設定（⚙️）でアドバイザーモデルを指定すると使えるようになります。"
+              }
             />
           )}
           <Toggle

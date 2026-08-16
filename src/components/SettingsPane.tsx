@@ -68,6 +68,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
   const [model, setModel] = useState("");
   const [thinkingModel, setThinkingModel] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("");
+  const [advisorModel, setAdvisorModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [keys, setKeys] = useState(() => loadKeybindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
@@ -94,6 +95,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
       setModel(s.model);
       setThinkingModel(s.thinkingModel);
       setSynthesisModel(s.synthesisModel);
+      setAdvisorModel(s.advisorModel);
       setBaseUrl(s.baseUrl);
       setApiKey("");
     });
@@ -120,6 +122,7 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
       model: model.trim(),
       thinkingModel: thinkingModel.trim(),
       synthesisModel: synthesisModel.trim(),
+      advisorModel: advisorModel.trim(),
       baseUrl: baseUrl.trim(),
     });
     saveKeybindings(keys);
@@ -213,6 +216,20 @@ export default function SettingsPane({ onSaved, theme, onThemeChange }: Settings
           <ModelPicker value={thinkingModel} onChange={setThinkingModel} listId="settings-thinking" className="mb-2" />
           <label className="mb-1 block text-[11px] text-neutral-400">合成モデル（高性能・空欄で既定）</label>
           <ModelPicker value={synthesisModel} onChange={setSynthesisModel} listId="settings-synthesis" />
+        </div>
+
+        <div className="rounded-md border border-teal-800/40 bg-teal-950/20 p-2">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="font-medium text-teal-300">🎓 アドバイザーモデル（任意）</p>
+            <Help
+              text={
+                <>
+                  検証ループが<b className="text-neutral-300">同じエラーで2回連続で詰まったとき</b>、ここで指定したより賢いモデルに一度だけ相談し、その助言を修正プロンプトに添えます（合否判定はしません・あくまで参考情報）。ここで設定しても、チャット画面側の「アドバイザー自動相談」トグルが ON でないと自動相談は発火しません。空欄なら未使用（consult_advisor ツールも無効）。
+                </>
+              }
+            />
+          </div>
+          <ModelPicker value={advisorModel} onChange={setAdvisorModel} listId="settings-advisor" />
         </div>
 
         <div className="rounded-md border border-neutral-700 bg-[#1e1e1e] p-2">
