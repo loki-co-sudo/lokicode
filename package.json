@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e:deepthink": "vitest run --config e2e/vitest.config.ts",
+    "e2e:deepthink": "vitest run --config e2e/vitest.config.ts e2e/deepthink.e2e.ts",
+    "e2e:harness": "vitest run --config e2e/vitest.config.ts e2e/harness.e2e.ts",
     "tauri": "tauri"
   },
   "dependencies": {

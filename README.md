@@ -206,9 +206,12 @@ npm run dev           # フロントエンドのみブラウザで確認（Tauri
 npm test              # ユニットテスト（Vitest・純ロジック）
 npm run tauri build   # 配布用インストーラを生成
 npm run e2e:deepthink # ディープシンクの実走 e2e（⚠️ 実際に OpenRouter API を呼ぶ＝有料。.env のキーを使用）
+npm run e2e:harness   # 決定的評価ハーネス（⚠️ 同じく有料。固定タスクを実走し非LLMグレーダで採点）
 ```
 
 > `e2e:deepthink` は、製品の推論コード（reasoning.ts / agent.ts）をそのまま Node 上で動かし、Tauri 層だけを実 API・実ファイル I/O に差し替えて（`e2e/tauriShim.ts`）、設計どおりのフェーズ（ブリーフ→接地調査→MoA→強モデル検証→最終合成）が実モデルで再現されるかを検証します。通常の `npm test` からは分離されています。
+
+> `e2e:harness` は、固定タスクセット（`e2e/harness/tasks.ts`）を実モデルで実走し、判定を LLM に頼らない決定的グレーダ（`src/lib/graders.ts`: 引用の実在確認・呼び出し数の回帰検出など）で採点する計測基盤です（deepthink-v3-roadmap P8）。結果は `e2e/harness/results/latest.tsv` に書き出され、前回結果との差分（回帰）を実行時に表示します（結果ファイル自体は `.gitignore` 済み・再実行のたびに作り直す前提）。グレーダのロジック自体は `npm test` でユニットテスト済みです。
 
 > エージェントの「実行接地の自己修正」を試すには、設定の「検証コマンド」に `npm run build` か `npm test` を入れてください。AI がコードを壊すと検出され、自動で直して再実行します。さらに「ループ」トグルを ON にすると、通るまで最大5回の開発ループ（証拠つき完了報告・同一エラー2連続での手詰まり停止）になります。
 

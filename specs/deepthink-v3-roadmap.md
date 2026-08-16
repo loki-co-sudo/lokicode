@@ -152,6 +152,20 @@ P8 なしに P11〜P13 を入れると、効果の有無が永久に判別でき
 
 ## P8. 決定的評価ハーネス（非 LLM グレーダ）〔計測基盤・最優先〕
 
+> **実装状況 (1.11.1)**: `src/lib/citations.ts`（引用抽出・段階1/2検証）・
+> `src/lib/graders.ts`（citations/exit/edits/forbidden/calls の5グレーダ）・
+> `src/lib/harnessReport.ts`（TSV 整形・回帰差分）・`e2e/harness/tasks.ts`
+> （固定タスク6件）・`e2e/harness.e2e.ts`（ランナー）を実装済み。純ロジックは
+> `npm test` でユニットテスト済み（`citations.test.ts` / `graders.test.ts` /
+> `harnessReport.test.ts`）。**ただし**タスクセットは現状すべて「deep」ルート
+> （読み取り専用）で、`edits` / `exit` / `forbidden` グレーダはハーネスの
+> タスクではまだ使われていない（`e2e/tauriShim.ts` が `write_text_file` /
+> `run_command` を許可しておらず、実行パスの安全なサンドボックスがまだ無い
+> ため。この配線は P10（実行パス検証・サンドボックス実装が本来必要な項目）
+> で行う）。**「既存 P2/P4/P5/P6 を遡って計測」は未実施**（`npm run
+> e2e:harness` は有料の実 API 呼び出しを伴うため、CLAUDE.md「完了の定義」5
+> に従いユーザーの実施可否確認を待っている）。
+
 - **動機**: 現状の唯一の計測手段が有料の実走 e2e であり、実質計測されていない（欠陥 A）。
   推論時スケーリングの評価は再現性が主要な争点であり
   （*Test-Time Scaling in Reasoning LLMs: Inference Regimes, Evaluation, and Reproducibility*,
