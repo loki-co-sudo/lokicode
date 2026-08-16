@@ -14,7 +14,13 @@ import { join, isAbsolute } from "node:path";
 import { installLocalStorage, callLog } from "./tauriShim";
 import { TASKS, type Task } from "./harness/tasks";
 import { gradeCitations, gradeCalls, type CallStats } from "../src/lib/graders";
-import { formatTsv, parseTsv, diffRegressions, type TaskRunResult } from "../src/lib/harnessReport";
+import {
+  formatTsv,
+  parseTsv,
+  diffRegressions,
+  mergeResults,
+  type TaskRunResult,
+} from "../src/lib/harnessReport";
 import type { ApiMessage } from "../src/lib/openrouter";
 
 // Switched from the free nvidia/nemotron-3-ultra-550b-a55b:free (too slow —
@@ -137,18 +143,57 @@ async function runTask(task: Task, previousCalls: CallStats[] | null): Promise<T
 // usable partial report instead of losing the whole run's progress/cost.
 const HARNESS_TIMEOUT_MS = 3 * 60 * 60 * 1000; // 3 hours
 
+/** Merge freshly-run details into a full prior detail list by taskId — same
+ * shape of problem as `harnessReport.ts`'s `mergeResults`, but on the
+ * harness-only `TaskRunDetail` wrapper, so kept local rather than generalizing
+ * the shared (unit-tested) module for a harness-only concern. */
+function mergeDetails(previous: TaskRunDetail[], updated: TaskRunDetail[]): TaskRunDetail[] {
+  const byId = new Map(previous.map((d) => [d.result.taskId, d]));
+  for (const d of updated) byId.set(d.result.taskId, d);
+  const order = previous.map((d) => d.result.taskId);
+  for (const d of updated) if (!order.includes(d.result.taskId)) order.push(d.result.taskId);
+  return order.map((id) => byId.get(id)!);
+}
+
+// Optional diagnostic re-run filter: HARNESS_TASK_IDS="agent-approval-levels,defect-memory-p5"
+// npm run e2e:harness — re-runs only the named tasks (e.g. to get latest-detail.json's
+// failure reason for a task that already failed) while every other task's row in
+// latest.tsv / latest-detail.json is carried forward untouched (mergeResults/mergeDetails).
+const FILTER_IDS = (process.env.HARNESS_TASK_IDS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const TASKS_TO_RUN = FILTER_IDS.length > 0 ? TASKS.filter((t) => FILTER_IDS.includes(t.id)) : TASKS;
+
 describe("deterministic evaluation harness (P8)", () => {
   beforeAll(() => installLocalStorage());
 
   it(
-    `runs the fixed task set (${TASKS.length} tasks) and grades deterministically`,
+    `runs ${FILTER_IDS.length > 0 ? `${TASKS_TO_RUN.length} filtered task(s)` : `the fixed task set (${TASKS.length} tasks)`} and grades deterministically`,
     async () => {
+      if (FILTER_IDS.length > 0) {
+        console.log(`[harness] filtered re-run: ${TASKS_TO_RUN.map((t) => t.id).join(", ")}`);
+        if (TASKS_TO_RUN.length !== FILTER_IDS.length) {
+          console.warn(
+            `[harness] HARNESS_TASK_IDS named ${FILTER_IDS.length} task(s) but only ${TASKS_TO_RUN.length} matched known task IDs`,
+          );
+        }
+      }
+
       let previous: TaskRunResult[] = [];
       if (existsSync(LATEST_PATH)) {
         try {
           previous = parseTsv(readFileSync(LATEST_PATH, "utf8"));
         } catch (e) {
           console.warn(`[harness] could not parse previous report, treating as no baseline: ${e}`);
+        }
+      }
+      let previousDetails: TaskRunDetail[] = [];
+      if (existsSync(LATEST_DETAIL_PATH)) {
+        try {
+          previousDetails = JSON.parse(readFileSync(LATEST_DETAIL_PATH, "utf8"));
+        } catch (e) {
+          console.warn(`[harness] could not parse previous detail file: ${e}`);
         }
       }
       const prevByTask = new Map(previous.map((r) => [r.taskId, r]));
@@ -163,9 +208,9 @@ describe("deterministic evaluation harness (P8)", () => {
         }
       }
 
-      const results: TaskRunResult[] = [];
-      const details: TaskRunDetail[] = [];
-      for (const task of TASKS) {
+      const newResults: TaskRunResult[] = [];
+      const newDetails: TaskRunDetail[] = [];
+      for (const task of TASKS_TO_RUN) {
         console.log(`\n=== [harness] task "${task.id}" — ${task.note} ===`);
         const prevCalls = prevByTask.get(task.id);
         const detail = await runTask(
@@ -173,8 +218,8 @@ describe("deterministic evaluation harness (P8)", () => {
           prevCalls ? [{ phase: "total", calls: prevCalls.calls }] : null,
         );
         const r = detail.result;
-        results.push(r);
-        details.push(detail);
+        newResults.push(r);
+        newDetails.push(detail);
         console.log(
           `  → ${r.pass ? "PASS" : "FAIL"} · calls=${r.calls} · ${r.seconds.toFixed(1)}s · $${r.usd.toFixed(4)}`,
         );
@@ -188,11 +233,16 @@ describe("deterministic evaluation harness (P8)", () => {
         // later timeout/crash. Same reasoning for the detail sidecar — a
         // long-running background capture can drop console output before the
         // process exits (observed), so the failure reason must land on disk
-        // as it happens, not only in a final summary.
-        writeFileSync(LATEST_PATH, formatTsv(results) + "\n");
-        writeFileSync(LATEST_DETAIL_PATH, JSON.stringify(details, null, 2) + "\n");
+        // as it happens, not only in a final summary. Merge so a filtered
+        // re-run never clobbers the other tasks' already-recorded rows.
+        writeFileSync(LATEST_PATH, formatTsv(mergeResults(previous, newResults)) + "\n");
+        writeFileSync(
+          LATEST_DETAIL_PATH,
+          JSON.stringify(mergeDetails(previousDetails, newDetails), null, 2) + "\n",
+        );
       }
 
+      const results = mergeResults(previous, newResults);
       const regressions = diffRegressions(results, previous);
       if (regressions.length > 0) {
         console.log("\n[harness] regressions vs previous run:");
@@ -202,8 +252,9 @@ describe("deterministic evaluation harness (P8)", () => {
       }
       console.log(`\n[harness] report written to ${LATEST_PATH}`);
 
-      // Sanity, not a quality gate: every task ran and produced a result.
-      expect(results).toHaveLength(TASKS.length);
+      // Sanity, not a quality gate: every RUN task produced a result (a
+      // filtered re-run intentionally does not touch the untouched tasks).
+      expect(newResults).toHaveLength(TASKS_TO_RUN.length);
     },
     HARNESS_TIMEOUT_MS,
   );

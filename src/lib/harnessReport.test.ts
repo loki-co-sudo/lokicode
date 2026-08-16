@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatTsv, parseTsv, diffRegressions, type TaskRunResult } from "./harnessReport";
+import { formatTsv, parseTsv, diffRegressions, mergeResults, type TaskRunResult } from "./harnessReport";
 
 function result(overrides: Partial<TaskRunResult> = {}): TaskRunResult {
   return {
@@ -95,5 +95,43 @@ describe("diffRegressions", () => {
     const prev = [result({ pass: false, graders: [{ name: "exit", ok: false, detail: "" }] })];
     const cur = [result({ pass: false, graders: [{ name: "exit", ok: false, detail: "" }] })];
     expect(diffRegressions(cur, prev)).toEqual([]);
+  });
+});
+
+describe("mergeResults", () => {
+  it("replaces a re-run task's row while leaving the others untouched", () => {
+    const previous = [
+      result({ taskId: "t1", pass: true }),
+      result({ taskId: "t2", pass: false }),
+      result({ taskId: "t3", pass: true }),
+    ];
+    const updated = [result({ taskId: "t2", pass: true, seconds: 99 })];
+    const merged = mergeResults(previous, updated);
+    expect(merged.map((r) => r.taskId)).toEqual(["t1", "t2", "t3"]);
+    expect(merged[1]).toEqual(updated[0]); // t2 replaced
+    expect(merged[0]).toEqual(previous[0]); // t1 untouched
+    expect(merged[2]).toEqual(previous[2]); // t3 untouched
+  });
+
+  it("preserves task order from `previous`, ignoring `updated`'s order", () => {
+    const previous = [result({ taskId: "a" }), result({ taskId: "b" }), result({ taskId: "c" })];
+    const updated = [result({ taskId: "c", seconds: 1 }), result({ taskId: "a", seconds: 2 })];
+    expect(mergeResults(previous, updated).map((r) => r.taskId)).toEqual(["a", "b", "c"]);
+  });
+
+  it("appends a genuinely new task ID not present in `previous`", () => {
+    const previous = [result({ taskId: "a" })];
+    const updated = [result({ taskId: "b" })];
+    expect(mergeResults(previous, updated).map((r) => r.taskId)).toEqual(["a", "b"]);
+  });
+
+  it("returns `updated` as-is when `previous` is empty", () => {
+    const updated = [result({ taskId: "a" }), result({ taskId: "b" })];
+    expect(mergeResults([], updated)).toEqual(updated);
+  });
+
+  it("is a no-op when `updated` is empty", () => {
+    const previous = [result({ taskId: "a" }), result({ taskId: "b" })];
+    expect(mergeResults(previous, [])).toEqual(previous);
   });
 });

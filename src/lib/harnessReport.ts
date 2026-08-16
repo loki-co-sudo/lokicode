@@ -98,3 +98,19 @@ export function diffRegressions(current: TaskRunResult[], previous: TaskRunResul
   }
   return out;
 }
+
+/** Merge freshly-run results into a full prior report by `taskId` (a re-run of
+ * a SUBSET of tasks — e.g. re-diagnosing a specific failure — must not lose
+ * the other tasks' already-recorded rows). `updated` entries replace same-ID
+ * entries in `previous`; task order is preserved from `previous`, with any
+ * genuinely new task IDs appended at the end. Pure. */
+export function mergeResults(
+  previous: TaskRunResult[],
+  updated: TaskRunResult[],
+): TaskRunResult[] {
+  const byId = new Map(previous.map((r) => [r.taskId, r]));
+  for (const r of updated) byId.set(r.taskId, r);
+  const order = previous.map((r) => r.taskId);
+  for (const r of updated) if (!order.includes(r.taskId)) order.push(r.taskId);
+  return order.map((id) => byId.get(id)!);
+}
