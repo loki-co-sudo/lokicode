@@ -1,5 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { commandRisk, toolNeedsApproval, withinWorkspace, initPathCaseSensitivity } from "./agent";
+import {
+  commandRisk,
+  toolNeedsApproval,
+  withinWorkspace,
+  initPathCaseSensitivity,
+  advertisedTools,
+  CONSULT_ADVISOR_TOOL,
+  ASK_USER_TOOL,
+} from "./agent";
 
 describe("commandRisk", () => {
   it("treats read-only commands as safe (incl. PowerShell Format-*)", () => {
@@ -53,6 +61,41 @@ describe("toolNeedsApproval", () => {
     expect(toolNeedsApproval("standard", "run_command", cmd("npm run build"))).toBe(false);
     expect(toolNeedsApproval("standard", "run_command", cmd("git push"))).toBe(true);
     expect(toolNeedsApproval("standard", "run_command", cmd("rm -rf dist"))).toBe(true);
+  });
+});
+
+describe("advertisedTools (advisor-mode.md §1 経路B: consult_advisor advertisement)", () => {
+  it("omits both ask_user and consult_advisor by default", () => {
+    const tools = advertisedTools({}, false);
+    expect(tools).not.toContain(ASK_USER_TOOL);
+    expect(tools).not.toContain(CONSULT_ADVISOR_TOOL);
+  });
+
+  it("advertises consult_advisor only when advisorModel is set", () => {
+    expect(advertisedTools({ advisorModel: "openai/gpt-5" }, false)).toContain(CONSULT_ADVISOR_TOOL);
+    expect(advertisedTools({}, false)).not.toContain(CONSULT_ADVISOR_TOOL);
+  });
+
+  it("advertises consult_advisor even in read-only phases (not gated on readOnly)", () => {
+    expect(advertisedTools({ readOnly: true, advisorModel: "openai/gpt-5" }, false)).toContain(
+      CONSULT_ADVISOR_TOOL,
+    );
+  });
+
+  it("ask_user and consult_advisor are gated independently of each other", () => {
+    // advisorModel set but no askUser callback / allowAskUser: only consult_advisor shows up.
+    const onlyAdvisor = advertisedTools({ advisorModel: "openai/gpt-5" }, false);
+    expect(onlyAdvisor).toContain(CONSULT_ADVISOR_TOOL);
+    expect(onlyAdvisor).not.toContain(ASK_USER_TOOL);
+
+    // allowAskUser + callback present but no advisorModel: only ask_user shows up.
+    const onlyAskUser = advertisedTools({ allowAskUser: true }, true);
+    expect(onlyAskUser).toContain(ASK_USER_TOOL);
+    expect(onlyAskUser).not.toContain(CONSULT_ADVISOR_TOOL);
+  });
+
+  it("allowAskUser without an askUser callback does not advertise ask_user", () => {
+    expect(advertisedTools({ allowAskUser: true }, false)).not.toContain(ASK_USER_TOOL);
   });
 });
 

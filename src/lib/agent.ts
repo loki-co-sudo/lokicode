@@ -2,7 +2,7 @@
 // commands) to actually operate on the machine, not just answer questions.
 
 import { invoke } from "@tauri-apps/api/core";
-import { chatOnceStream, type ApiMessage, type Usage } from "./openrouter";
+import { chatOnceStream, complete, type ApiMessage, type Usage } from "./openrouter";
 import { getMaxIterations, getCommandTimeout, getRestrictToWorkspace } from "./agentSettings";
 import { shouldCompact, compactToolResults } from "./agentCompaction";
 
@@ -276,6 +276,39 @@ export const ASK_USER_TOOL = {
   },
 };
 
+/** Advisor consult tool (advisor-mode.md §1 経路B). Advertised only when
+ * `opts.advisorModel` is set (a stronger model configured for this purpose).
+ * Not tied to `opts.readOnly` — it's a single non-interactive API call to a
+ * different model, so it's safe in unattended/parallel phases too. It IS,
+ * however, only threaded into the deep-think execute phase's options (not
+ * brief/investigate/judge/final) — see advisor-mode.md §3 for why. */
+export const CONSULT_ADVISOR_TOOL = {
+  type: "function",
+  function: {
+    name: "consult_advisor",
+    description:
+      "Consult a stronger, independent advisor model for a second opinion or strategic guidance. " +
+      "Call this ONLY when the user's request explicitly asks for advisor input / a second opinion, " +
+      "or when you are genuinely stuck and outside guidance would clearly help. Do not call this " +
+      "routinely or for decisions you can make yourself.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description:
+            "A self-contained question — the advisor sees ONLY this, not your conversation history.",
+        },
+      },
+      required: ["question"],
+    },
+  },
+};
+
+const ADVISOR_SYSTEM =
+  "You are a senior advisor being consulted by another AI agent that is stuck or wants a second " +
+  "opinion. Answer concisely and concretely — actionable guidance, not a restatement of the question.";
+
 function truncate(text: string): string {
   if (text.length <= MAX_RESULT_CHARS) return text;
   return text.slice(0, MAX_RESULT_CHARS) + `\n…(${text.length - MAX_RESULT_CHARS} 文字省略)`;
@@ -464,6 +497,11 @@ export interface AgentOptions {
   finalizeOnCap?: boolean;
   /** Offer the ask_user tool (interactive top-level agent only). */
   allowAskUser?: boolean;
+  /** Offer the consult_advisor tool (advisor-mode.md §1 経路B). Set only where
+   * the advisor is meant to be reachable — the deep-think execute phase and
+   * interactive Agent mode, NOT the brief/investigate/judge/final phases (see
+   * advisor-mode.md §3 for why those are deliberately excluded). */
+  advisorModel?: string;
   /** Run id for backend cancellation; lets Stop abort an in-flight API call. */
   cancelId?: number;
   /** Label for the `[tag]` console timing logs (e.g. "execute" for deep-think). */
@@ -484,6 +522,22 @@ export interface AgentOptions {
  * only bounds *consecutive* no-progress nudges, not total continuations. */
 const MAX_IDLE_NUDGES = 3;
 
+/** Pure tool-advertisement logic, split out of `runAgent` so it's unit-testable
+ * without mocking the API layer. `ask_user`/`consult_advisor` are each gated by
+ * their own independent condition (interactive callback present / advisor
+ * model configured) — neither implies the other. */
+export function advertisedTools(
+  opts: Pick<AgentOptions, "readOnly" | "allowAskUser" | "advisorModel">,
+  hasAskUser: boolean,
+) {
+  const baseTools = opts.readOnly ? READ_ONLY_TOOLS : TOOLS;
+  return [
+    ...baseTools,
+    ...(opts.allowAskUser && hasAskUser ? [ASK_USER_TOOL] : []),
+    ...(opts.advisorModel ? [CONSULT_ADVISOR_TOOL] : []),
+  ];
+}
+
 /**
  * Run the agent loop starting from `messages` (system + history + latest user).
  * Drives tool calls until the model returns a final answer with no tool calls.
@@ -497,9 +551,7 @@ export async function runAgent(
   const conv: ApiMessage[] = [...messages];
   let finalText = "";
 
-  const baseTools = opts.readOnly ? READ_ONLY_TOOLS : TOOLS;
-  const advertised =
-    opts.allowAskUser && cb.askUser ? [...baseTools, ASK_USER_TOOL] : baseTools;
+  const advertised = advertisedTools(opts, !!cb.askUser);
   const maxIterations = opts.maxIterations ?? getMaxIterations();
   // Live timing to the F12 console so a long agent loop isn't a black box: each
   // iteration logs its LLM round-trip time, tool calls, and per-tool durations.
@@ -589,6 +641,40 @@ export async function runAgent(
             : "（この文脈では質問できません。最善の仮定を置いて進めてください）";
         cb.onToolEnd("done", answer);
         conv.push({ role: "tool", tool_call_id: call.id, content: `ユーザーの回答: ${answer}` });
+        continue;
+      }
+
+      // Advisor consult: a single non-interactive completion to a separately
+      // configured (stronger) model. Handled inline like ask_user/update_plan
+      // rather than via execTool, so onUsage cost accounting stays simple and
+      // execTool's "no LLM calls" contract holds. The advisor's answer is
+      // advisory only — it carries no pass/fail authority (advisor-mode.md §5).
+      if (name === "consult_advisor") {
+        const question = String(args.question ?? "").trim();
+        cb.onToolStart({ name, args });
+        if (!opts.advisorModel || !question) {
+          const msg = "アドバイザーが利用できません（モデル未設定または質問が空です）。";
+          cb.onToolEnd("error", msg);
+          conv.push({ role: "tool", tool_call_id: call.id, content: msg });
+          continue;
+        }
+        try {
+          const { content, usage } = await complete(
+            [
+              { role: "system", content: ADVISOR_SYSTEM },
+              { role: "user", content: question },
+            ],
+            opts.advisorModel,
+            opts.cancelId,
+          );
+          cb.onUsage?.(usage);
+          cb.onToolEnd("done", content);
+          conv.push({ role: "tool", tool_call_id: call.id, content });
+        } catch (e) {
+          const msg = `アドバイザー呼び出しエラー: ${e instanceof Error ? e.message : String(e)}`;
+          cb.onToolEnd("error", msg);
+          conv.push({ role: "tool", tool_call_id: call.id, content: msg });
+        }
         continue;
       }
 
