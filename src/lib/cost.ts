@@ -150,6 +150,14 @@ export interface PipelineShape {
   beamBranch: number;
   /** The strong-model judges that score the beam candidates. */
   beamJudge: number;
+  /** Execution fast-path (deepthink-v3-roadmap P10): the executor's own
+   * tool-using agent loop, counted as ONE structural call (like `invest`/
+   * `refine`) — its internal round-trips inflate via `toolMult` at estimate
+   * time exactly like every other loop phase. 0 on the analysis path. */
+  execute: number;
+  /** The optional post-execution grounded review (strong, plain — a single
+   * CRITERIA/CONSTRAINTS check against the diff). 0 unless it actually ran. */
+  execReview: number;
 }
 
 // Counts normal-path calls only; the empty-output retry in reasoning.ts
@@ -168,6 +176,17 @@ export function pipelineShape(
   /** Defect-guided beam expected (P6): adds BEAM_WIDTH refine branches + their
    * judges (fires at most once per run on deep-hard×quality). */
   beam = false,
+  /** Execution fast-path happened/expected (P10). IMPORTANT ASYMMETRY (see
+   * `estimateDeepReasoningCost`'s doc comment): the PRE-SEND estimate must
+   * never pass this (the route isn't decided until after send — always shows
+   * the analysis-path shape as a safe upper bound), but POST-RUN calibration
+   * (`structuralCalls` → `cost.ts` callers' `recordToolRun`) should pass the
+   * run's actual `needsExec` once it's known, or the tool multiplier gets
+   * learned against a shape the run never actually had. */
+  execPath = false,
+  /** The optional grounded review (P10 §3) actually ran this run. Only
+   * meaningful when `execPath` is true. */
+  execReview = false,
 ): PipelineShape {
   const breadth = Math.max(1, Math.min(5, Math.floor(samples)));
   const d = Math.max(0, Math.floor(depth));
@@ -179,8 +198,31 @@ export function pipelineShape(
   const grounding = useTools && ensemble && breadth === 1 ? 1 : 0;
   const K = 3; // assumed median sub-task width when decomposed
   const BW = 2; // BEAM_WIDTH (mirrors reasoning.ts)
+  // classify ∥ brief always run up front (they decide the route) regardless
+  // of which path is taken — only the phases AFTER the route decision differ.
+  const classify = useTools ? 1 : 0;
+  if (execPath) {
+    return {
+      classify,
+      brief: 1,
+      invest: 0,
+      suff: 0,
+      judge: 0,
+      refine: 0,
+      draftLoop: 0,
+      draftPlain: 0,
+      finalLoop: 0,
+      finalPlain: 0,
+      subtask: 0,
+      compose: 0,
+      beamBranch: 0,
+      beamJudge: 0,
+      execute: 1,
+      execReview: execReview ? 1 : 0,
+    };
+  }
   return {
-    classify: useTools ? 1 : 0,
+    classify,
     brief: 1,
     invest: breadth > 1 ? breadth : grounding,
     suff: breadth > 1 ? 1 : 0,
@@ -194,12 +236,17 @@ export function pipelineShape(
     compose: decompose ? 1 : 0,
     beamBranch: beam ? BW : 0,
     beamJudge: beam ? BW : 0,
+    execute: 0,
+    execReview: 0,
   };
 }
 
 /** Agent-loop vs plain structural call totals — the calibration divides observed
  * loop round-trips by `loop` to learn the tool multiplier, exactly the count the
- * estimate multiplies by it. */
+ * estimate multiplies by it. `execPath`/`execReview` (P10): pass the run's
+ * ACTUAL route once known — this is the post-run calibration caller, not the
+ * pre-send estimate, so unlike `estimateDeepReasoningCost` it is correct (and
+ * necessary) to pass them here. See `pipelineShape`'s `execPath` doc comment. */
 export function structuralCalls(
   depth: number,
   samples: number,
@@ -208,15 +255,43 @@ export function structuralCalls(
   judgeSamples = 1,
   decompose = false,
   beam = false,
+  execPath = false,
+  execReview = false,
 ): { loop: number; plain: number } {
-  const s = pipelineShape(depth, samples, useTools, ensembleSamples, judgeSamples, decompose, beam);
+  const s = pipelineShape(
+    depth,
+    samples,
+    useTools,
+    ensembleSamples,
+    judgeSamples,
+    decompose,
+    beam,
+    execPath,
+    execReview,
+  );
   return {
-    loop: s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask + s.beamBranch,
+    loop: s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask + s.beamBranch + s.execute,
     plain:
-      s.classify + s.brief + s.suff + s.judge + s.draftPlain + s.finalPlain + s.compose + s.beamJudge,
+      s.classify +
+      s.brief +
+      s.suff +
+      s.judge +
+      s.draftPlain +
+      s.finalPlain +
+      s.compose +
+      s.beamJudge +
+      s.execReview,
   };
 }
 
+// PRE-SEND estimate (P10): intentionally NEVER passes execPath to
+// pipelineShape — at send time neither the router's classification nor the
+// deep-think NEEDS_EXEC verdict has run yet, so whether a run will take the
+// execute fast path is genuinely unknown. Always showing the (larger)
+// analysis-path shape keeps this a safe upper bound rather than a guess that
+// can under-estimate. The execute-path shape is only used for POST-RUN
+// calibration (`structuralCalls`, called after the route is known) — see its
+// doc comment.
 export function estimateDeepReasoningCost(p: EstimateParams): CostEstimate {
   const t = p.thinking;
   const s = p.synthesis;

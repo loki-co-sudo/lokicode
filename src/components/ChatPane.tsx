@@ -172,6 +172,7 @@ function toolLabel(name: string): string {
       write_file: "ファイル書き込み",
       run_command: "コマンド実行",
       grep_search: "コード検索",
+      verify_command_suggestion: "検証コマンドの提案",
     }[name] ?? name
   );
 }
@@ -580,6 +581,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     };
   }, [workspaceRoot]);
   const callCountRef = useRef(0);
+  // P10: the run's ACTUAL route/whether the grounded review fired, for
+  // post-run cost calibration (see cost.ts pipelineShape's execPath doc).
+  const execPathRef = useRef(false);
+  const execReviewRef = useRef(false);
 
   // Approximate input tokens of the base prompt that will be sent (system +
   // history + optional active file + the pending input). CJK-aware.
@@ -869,6 +874,8 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
     setMentionQuery(null);
     streamingRef.current = false;
     callCountRef.current = 0;
+    execPathRef.current = false;
+    execReviewRef.current = false;
     editedRef.current = false;
     abortRef.current = { aborted: false };
     const signal = abortRef.current;
@@ -987,6 +994,20 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
             onPlan: handlePlan,
             onAssistantDelta: handleAssistantDelta,
             onAssistantDone: handleAssistantDone,
+            // P10: record the run's actual route + whether the grounded review
+            // fired, for post-run cost calibration (not the pre-send estimate).
+            onRouteDecided: (needsExec) => {
+              execPathRef.current = needsExec;
+            },
+            onExecReview: () => {
+              execReviewRef.current = true;
+            },
+            // No verify command configured: offer the inferred one ONCE via the
+            // same approval UI as a tool call, so nothing runs silently.
+            onSuggestVerifyCommand: (command: string) =>
+              new Promise<boolean>((resolve) =>
+                setPending({ name: "verify_command_suggestion", args: { command }, resolve }),
+              ),
           },
         );
       } else if (useAgent) {
@@ -1106,12 +1127,20 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       // structural plain completions. (An execute fast-path run has a different
       // shape, so this stays an approximation that the EWMA smooths.)
       if (useDeep && useAgent) {
+        // P10: pass the run's ACTUAL route (execPathRef, set once NEEDS_EXEC
+        // resolves) so an execute-fast-path run is calibrated against its own
+        // (much smaller) structural shape instead of the analysis-path shape
+        // it never had — see cost.ts's `structuralCalls` doc comment.
         const { loop, plain } = structuralCalls(
           effDepth,
           effSamples,
           true,
           EFFORT_PARAMS[effortLevel].ensembleSamples,
           EFFORT_PARAMS[effortLevel].judgeSamples,
+          false,
+          false,
+          execPathRef.current,
+          execReviewRef.current,
         );
         const actualLoop = Math.max(1, callCountRef.current - plain);
         recordToolRun(actualLoop, loop);
@@ -1444,7 +1473,9 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       {pending && (
         <div className="mx-3 mb-2 rounded-md border border-amber-600/60 bg-amber-950/30 p-3 text-xs">
           <p className="mb-1 font-medium text-amber-300">
-            AI が次の操作を実行しようとしています（{toolLabel(pending.name)}）
+            {pending.name === "verify_command_suggestion"
+              ? "検証コマンドが未設定です。ワークスペースから次のコマンドを推測しました。今後の自動検証に使ってよいですか？"
+              : `AI が次の操作を実行しようとしています（${toolLabel(pending.name)}）`}
           </p>
           {isDestructive(pending.name, pending.args) && (
             <p className="mb-2 rounded border border-red-600/60 bg-red-950/40 px-2 py-1 text-[11px] font-medium text-red-300">
@@ -1459,7 +1490,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               />
             ) : (
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 text-[11px] text-neutral-200">
-                {pending.name === "run_command"
+                {pending.name === "run_command" || pending.name === "verify_command_suggestion"
                   ? String(pending.args.command ?? "")
                   : JSON.stringify(pending.args, null, 2)}
               </pre>
@@ -1484,10 +1515,10 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
               🔍 これは何をする？
             </button>
             <button onClick={() => resolveApproval(false)} className="rounded px-3 py-1 text-neutral-300 hover:bg-neutral-700">
-              拒否
+              {pending.name === "verify_command_suggestion" ? "使わない" : "拒否"}
             </button>
             <button onClick={() => resolveApproval(true)} className="rounded bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-500">
-              承認して実行
+              {pending.name === "verify_command_suggestion" ? "保存して使う" : "承認して実行"}
             </button>
           </div>
         </div>

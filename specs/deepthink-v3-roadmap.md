@@ -240,6 +240,23 @@ P8 なしに P11〜P13 を入れると、効果の有無が永久に判別でき
 
 ## P10. 実行パスの検証を既定で有効化する〔軸1・品質デルタ最大〕
 
+> **実装状況 (1.11.1)**: 実装済み。`src/lib/verifyCommand.ts`（`inferVerifyCommand`
+> 純ロジック＋`detectVerifyCommand` 非同期ラッパー、優先順位はテスト済み）・
+> `reasoning.ts` の実行パスに「検証コマンド未設定→推測→ユーザー承認1回→
+> `lokicode.verifyCommand` に保存」の配線・`git diff` を強モデルに渡す
+> grounded review（`GROUNDED_REVIEW`/`parseGroundedReview`、`editedCount > 0`
+> のときのみ、検証コマンドの有無と無関係に発火する別ゲート）を追加した。
+> `cost.ts` の `pipelineShape`/`structuralCalls` に `execPath`/`execReview`
+> を追加し、**事前概算は execPath を渡さない（解析パス形状を安全側の上限と
+> して維持）／事後校正（`ChatPane.tsx` の `recordToolRun` 呼び出し）だけが
+> 実際のルートを渡す**という非対称性を実装（欠陥E後半の是正）。承認UIは
+> 既存の承認ダイアログを再利用（`pending.name === "verify_command_suggestion"`）。
+> ユニットテストは `verifyCommand.test.ts` と `cost.test.ts` の execPath 系。
+> **未実施**: `e2e/harness/` のタスクセットへの配線（P8 のハーネスがまだ
+> 書き込み/コマンド実行を許可するサンドボックスを持たないため — 別途の
+> 安全なサンドボックス実装が必要で、本項目のスコープ外として据え置いた）。
+> P8 グレーダでの exit/edits 導入前後比較も同じ理由で未計測。
+
 - **動機**: 欠陥 E。検証コマンド未設定のランは無検証で終わる。実行結果（exit code）は
   判定側の知能に依存しない最強の信号なので、**設定忘れで失われるのが最大の損失**。
 - **実装スケッチ**:

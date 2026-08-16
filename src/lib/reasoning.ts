@@ -17,10 +17,12 @@ import {
   getEffortParams,
   getEffort,
   getVerifyCommand,
+  setVerifyCommand,
   getCommandTimeout,
   getLoopMode,
   MAX_VERIFY_ATTEMPTS,
 } from "./agentSettings";
+import { detectVerifyCommand } from "./verifyCommand";
 import { LOOP_MAX_ATTEMPTS } from "./loop";
 import { runVerifyLoop } from "./verifyLoop";
 import { buildRepoMap } from "./repoMap";
@@ -69,6 +71,20 @@ export interface ReasoningCallbacks {
   onPlan?: (todos: Todo[]) => void;
   onAssistantDelta?: (chunk: string) => void;
   onAssistantDone?: () => void;
+  // ── P10 (execution-path verification) hooks ────────────────────────────
+  /** Fired once the NEEDS_EXEC verdict is known, so the caller can record the
+   * run's ACTUAL route for post-run cost calibration (see cost.ts's
+   * `structuralCalls`/`pipelineShape` `execPath` doc comments — the estimate
+   * shown before send can't know this, but the calibration after the run should). */
+  onRouteDecided?: (needsExec: boolean) => void;
+  /** No verify command is configured but one was inferred from the workspace
+   * manifest (package.json/Cargo.toml/pyproject.toml): ask the user ONCE
+   * whether to save and use it (never run an inferred command silently).
+   * Omit to skip the inference entirely (verify stays off, as before). */
+  onSuggestVerifyCommand?: (command: string) => Promise<boolean>;
+  /** Fired if the post-execution grounded review (CRITERIA/CONSTRAINTS check
+   * against the diff) actually ran, for cost calibration (`execReview`). */
+  onExecReview?: () => void;
 }
 
 export interface ReasoningOptions {
@@ -256,6 +272,29 @@ const REFINE = (defects: string[], useTools: boolean) =>
       "Output ONLY the improved, complete answer — no preamble, no score.\n\nIssues to fix:\n" +
       defects.map((d) => `- ${d}`).join("\n"),
   );
+
+// P10 §3: grounded review — a strong-model check of the executor's diff
+// against the brief's CRITERIA/CONSTRAINTS specifically (correctness is
+// already covered by the verify command / earlier judge rounds; this catches
+// scope/format/constraint violations exit codes can't see).
+const GROUNDED_REVIEW = usr(
+  "Above is the git diff produced by the execution phase. Check it ONLY against the design " +
+    "brief's CRITERIA and CONSTRAINTS (not general code quality — that is out of scope here). " +
+    'Output ONLY minified JSON: {"violations": ["concrete CRITERIA/CONSTRAINTS violation", ...]} ' +
+    "— use [] when the diff satisfies every CRITERIA/CONSTRAINTS item.",
+);
+
+/** Parse the grounded review's JSON verdict; tolerant of stray prose. */
+function parseGroundedReview(text: string): string[] {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return [];
+  try {
+    const o = JSON.parse(m[0]) as { violations?: unknown };
+    return Array.isArray(o.violations) ? o.violations.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
 
 // Gate for the plan→execute handoff: does finishing the task need side effects?
 const NEEDS_EXEC = usr(
@@ -660,6 +699,7 @@ export async function runRecurrentReasoning(
     ]);
     if (aborted()) return;
     needsExec = opts.useTools && parseNeedsExec(verdict);
+    cb.onRouteDecided?.(needsExec);
     const brief = parseBrief(briefText, breadth);
     cb.onThought("設計（ブリーフ）", synthLabel, briefText);
     // The brief anchors every later phase: investigation, the verifier's rubric,
@@ -767,12 +807,28 @@ export async function runRecurrentReasoning(
       timings.push({ phase: "execute", ms: exMs, model: exModel || "(default)", tools: true });
       console.log(`[deepthink] execute · ${(exMs / 1000).toFixed(1)}s · ${exModel || "(default)"} · tools`);
 
+      // ── P10: infer + offer a verify command when none is configured ──────────
+      // A verify command left unset means this run finishes with NO
+      // verification signal at all (neither LLM judge — the analysis loops
+      // were skipped — nor exit code). Infer one from the workspace manifest
+      // and ask ONCE before using it; never run an inferred command silently.
+      let verifyCmd = getVerifyCommand();
+      if (!aborted() && editedCount > 0 && !verifyCmd && opts.workspaceRoot && cb.onSuggestVerifyCommand) {
+        const inferred = await detectVerifyCommand(opts.workspaceRoot, readCitedFile);
+        if (inferred) {
+          const accepted = await cb.onSuggestVerifyCommand(inferred);
+          if (accepted) {
+            setVerifyCommand(inferred);
+            verifyCmd = inferred;
+          }
+        }
+      }
+
       // ── P1: execution-grounded verification (frontier-roadmap P1) ────────────
       // If the executor edited files and a verify command is configured, run the
       // same change→verify→fix loop as Agent mode. This upgrades deep-think's
       // quality signal from "LLM-judge only" to ground truth (exit codes) — a
       // signal that does not saturate at the judge's intelligence.
-      const verifyCmd = getVerifyCommand();
       if (!aborted() && editedCount > 0 && verifyCmd) {
         phaseTag = "verify-exec";
         const vStart = performance.now();
@@ -798,6 +854,51 @@ export async function runRecurrentReasoning(
           model: exModel || "(default)",
           tools: true,
         });
+      }
+
+      // ── P10 §3: grounded review (optional, separate gate) ────────────────────
+      // Independent of whether a verify command exists: a strong-model check of
+      // the diff against the brief's CRITERIA/CONSTRAINTS specifically (not a
+      // general code review — the verify command / judge already cover
+      // correctness). Best-effort — a failure here must not fail the run.
+      if (!aborted() && editedCount > 0 && opts.workspaceRoot) {
+        phaseTag = "exec-review";
+        const rStart = performance.now();
+        try {
+          const diffOut = await invoke<{ stdout: string; stderr: string; code: number }>(
+            "run_command",
+            {
+              command: "git diff",
+              cwd: opts.workspaceRoot,
+              timeoutSecs: getCommandTimeout(),
+            },
+          );
+          const diffText = diffOut.stdout.trim();
+          if (diffText) {
+            const reviewText = await think(
+              [...execCtx, sys(`git diff（実行フェーズが行った変更）:\n\n${clip(diffText, MAX_EVIDENCE_CHARS)}`), GROUNDED_REVIEW],
+              synthesis,
+              { tools: false, tag: "exec-review" },
+            );
+            cb.onExecReview?.();
+            const violations = parseGroundedReview(reviewText);
+            if (violations.length > 0) {
+              cb.onThought(
+                "実行後レビュー（CRITERIA/CONSTRAINTS 違反チェック）",
+                synthLabel,
+                violations.map((v) => `- ${v}`).join("\n"),
+              );
+            }
+            timings.push({
+              phase: "exec-review",
+              ms: performance.now() - rStart,
+              model: synthesis || "(default)",
+              tools: false,
+            });
+          }
+        } catch (e) {
+          console.warn("[deepthink] exec-review failed (non-fatal)", e);
+        }
       }
       return;
     }

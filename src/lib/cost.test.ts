@@ -82,6 +82,8 @@ describe("pipelineShape", () => {
       compose: 0,
       beamBranch: 0,
       beamJudge: 0,
+      execute: 0,
+      execReview: 0,
     });
   });
 
@@ -161,6 +163,38 @@ describe("pipelineShape", () => {
     expect(pipelineShape(1, 1, true).invest).toBe(0); // no ensemble → tool-using draft grounds itself
     expect(pipelineShape(3, 3, true).invest).toBe(3); // breadth already investigates
   });
+
+  it("execPath (P10) zeroes every analysis phase and counts a single execute loop", () => {
+    const s = pipelineShape(5, 3, true, 3, 2, true, true, true);
+    expect(s.invest).toBe(0);
+    expect(s.suff).toBe(0);
+    expect(s.judge).toBe(0);
+    expect(s.refine).toBe(0);
+    expect(s.draftLoop).toBe(0);
+    expect(s.draftPlain).toBe(0);
+    expect(s.finalLoop).toBe(0);
+    expect(s.finalPlain).toBe(0);
+    expect(s.subtask).toBe(0);
+    expect(s.compose).toBe(0);
+    expect(s.beamBranch).toBe(0);
+    expect(s.beamJudge).toBe(0);
+    expect(s.execute).toBe(1);
+    // classify/brief still run up front regardless of route.
+    expect(s.classify).toBe(1);
+    expect(s.brief).toBe(1);
+  });
+
+  it("execPath without execReview counts execute only (no review call)", () => {
+    expect(pipelineShape(1, 1, true, 2, 1, false, false, true, false).execReview).toBe(0);
+  });
+
+  it("execPath with execReview adds the strong-plain review call", () => {
+    expect(pipelineShape(1, 1, true, 2, 1, false, false, true, true).execReview).toBe(1);
+  });
+
+  it("execReview is ignored when execPath is false", () => {
+    expect(pipelineShape(1, 1, true, 2, 1, false, false, false, true).execReview).toBe(0);
+  });
 });
 
 describe("structuralCalls", () => {
@@ -191,5 +225,14 @@ describe("structuralCalls", () => {
     const s = pipelineShape(3, 1, true, 2, 1, true);
     expect(c.loop).toBe(s.invest + s.refine + s.subtask);
     expect(c.plain).toBe(s.classify + s.brief + s.judge + s.finalPlain + s.compose);
+  });
+
+  it("execPath (P10): loop=classify/brief+execute, no analysis-phase calls", () => {
+    // classify(1) + brief(1) plain; execute(1) loop; no review.
+    expect(structuralCalls(3, 3, true, 2, 1, false, false, true, false)).toEqual({ loop: 1, plain: 2 });
+  });
+
+  it("execPath with execReview: the review call is counted as plain (strong, no tools)", () => {
+    expect(structuralCalls(3, 3, true, 2, 1, false, false, true, true)).toEqual({ loop: 1, plain: 3 });
   });
 });
