@@ -1167,6 +1167,11 @@ export async function runRecurrentReasoning(
       // score in a row). Branch BEAM_WIDTH refine candidates in parallel and keep
       // the one the judge scores highest — a small tree search that can escape a
       // local optimum the single-line refine can't. Fires at most once per run.
+      // Deliberately uses the FULL `defects` list, not P13's `focused` narrowing:
+      // the beam exists precisely because the narrow linear path got stuck, so
+      // handing both branches an even-narrower prompt would shrink the search
+      // instead of widening it — and two branches differing only by temperature
+      // on a smaller prompt reintroduces the correlation problem P12 addressed.
       if (beamEligible && !beamedOnce && consecutiveLow >= 2) {
         beamedOnce = true;
         phaseTag = "beam";
@@ -1178,7 +1183,7 @@ export async function runRecurrentReasoning(
                 ...ctx,
                 ...distillMsgs,
                 { role: "assistant", content: draft },
-                REFINE(focused, opts.useTools),
+                REFINE(defects, opts.useTools),
               ],
               synthesis,
               { readOnly: true },
