@@ -31,6 +31,7 @@ import { taskKeyFor, buildCachedFactsMessage, recordVerifiedFacts } from "./evid
 import { recordModelRun } from "./modelLedger";
 import { extractCitations, validateCitations, downgradeUnverifiedCitations } from "./citations";
 import { compactEvidence } from "./evidence";
+import { assignAngles, distillPastAttempts } from "./proposer";
 
 /** Extract the current user question from the base messages (last user turn),
  * for scoping the evidence cache (P4) to this task. */
@@ -1062,9 +1063,14 @@ export async function runRecurrentReasoning(
       cb.onThought("統合（COMPOSE）", synthLabel, draft);
     } else if (ensemble) {
       // Mixture-of-Agents: several independent drafts (parallel, plain) → merge.
+      // P12 §1: decorrelate the proposers (same evidence/model/instruction
+      // otherwise correlates their errors — MoA/best-of-N only helps when
+      // errors are independent). Cost-neutral: same call count, one extra
+      // system message per call assigning it a distinct angle.
+      const draftAngles = assignAngles(brief.criteria, ensembleSamples);
       const proposals = await Promise.all(
-        Array.from({ length: ensembleSamples }, () =>
-          think([...base, ...genCtx, draftInstr], thinking, { tools: false }),
+        draftAngles.map((angle) =>
+          think([...base, ...genCtx, sys(angle), draftInstr], thinking, { tools: false }),
         ),
       );
       if (aborted()) return;
@@ -1103,6 +1109,13 @@ export async function runRecurrentReasoning(
     const beamEligible = opts.beamSearch === true && getEffort() === "quality";
     let consecutiveLow = 0;
     let beamedOnce = false;
+    // P12 §2 — Parallel-Distill-Refine style sequential conditioning: REFINE
+    // otherwise only ever sees the CURRENT round's defects, so an EARLIER
+    // round's failure mode can silently resurface a few rounds later. Only
+    // when depth>=2 and the draft came from ensemble (MoA) — a single-shot
+    // linear run has no "past attempt" worth distilling yet.
+    const pdrEnabled = depth >= 2 && ensemble;
+    const pastRoundDefectLists: string[][] = [];
     for (let k = 1; k <= depth; k++) {
       if (aborted()) return;
       // Strong verifier: the critic runs on the synthesis (strong) model so the
@@ -1136,6 +1149,13 @@ export async function runRecurrentReasoning(
       const escalate = score < effort.escalateBelow;
       consecutiveLow = escalate ? consecutiveLow + 1 : 0;
 
+      // P12 §2: distill EARLIER rounds' defects (not this round's — those are
+      // already passed via REFINE(defects,...)) into a "past attempt" note.
+      // Framed per CLAUDE.md's re-injection safety rule so proper nouns/
+      // numbers inside it are never mistaken for this task's current facts.
+      const distillText = pdrEnabled ? distillPastAttempts(pastRoundDefectLists) : "";
+      const distillMsgs: ApiMessage[] = distillText ? [sys(distillText)] : [];
+
       // ── P6 — Defect-guided beam: linear refine is stuck (2nd sub-escalation
       // score in a row). Branch BEAM_WIDTH refine candidates in parallel and keep
       // the one the judge scores highest — a small tree search that can escape a
@@ -1146,7 +1166,13 @@ export async function runRecurrentReasoning(
         const branches = await Promise.all(
           Array.from({ length: BEAM_WIDTH }, () =>
             think(
-              [...base, ...ctx, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
+              [
+                ...base,
+                ...ctx,
+                ...distillMsgs,
+                { role: "assistant", content: draft },
+                REFINE(defects, opts.useTools),
+              ],
               synthesis,
               { readOnly: true },
             ),
@@ -1169,12 +1195,19 @@ export async function runRecurrentReasoning(
           synthLabel,
           draft,
         );
+        if (pdrEnabled) pastRoundDefectLists.push(defects);
         continue;
       }
 
       const refineModel = escalate ? synthesis : thinking;
       draft = await think(
-        [...base, ...ctx, { role: "assistant", content: draft }, REFINE(defects, opts.useTools)],
+        [
+          ...base,
+          ...ctx,
+          ...distillMsgs,
+          { role: "assistant", content: draft },
+          REFINE(defects, opts.useTools),
+        ],
         refineModel,
         { readOnly: true },
       );
@@ -1183,6 +1216,7 @@ export async function runRecurrentReasoning(
         escalate ? synthLabel : thinkingLabel,
         draft,
       );
+      if (pdrEnabled) pastRoundDefectLists.push(defects);
     }
     if (aborted()) return;
     // Persist this run's defect patterns for future runs (P5). Best-effort.
@@ -1193,11 +1227,16 @@ export async function runRecurrentReasoning(
     let final: string;
     phaseTag = "final";
     if (ensemble) {
+      // P12 §1 applies here too (欠陥D's second instance — best-of-N final
+      // candidates are just as correlated as the MoA drafts were).
+      const finalAngles = assignAngles(brief.criteria, ensembleSamples);
       const candidates = await Promise.all(
-        Array.from({ length: ensembleSamples }, () =>
-          think([...base, ...genCtx, { role: "assistant", content: draft }, FINAL(false)], synthesis, {
-            tools: false,
-          }),
+        finalAngles.map((angle) =>
+          think(
+            [...base, ...genCtx, { role: "assistant", content: draft }, sys(angle), FINAL(false)],
+            synthesis,
+            { tools: false },
+          ),
         ),
       );
       if (aborted()) return;
