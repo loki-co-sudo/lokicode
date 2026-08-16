@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { runVerifyLoop, buildFixPrompt, type VerifyDeps } from "./verifyLoop";
+import { runVerifyLoop, buildFixPrompt, type VerifyDeps, type AdvisorStuckContext } from "./verifyLoop";
 
 interface Script {
   results: { code: number; stdout?: string; stderr?: string }[];
 }
 
-function makeDeps(script: Script) {
+function makeDeps(script: Script, consultAdvisor?: VerifyDeps["consultAdvisor"]) {
   const events: string[] = [];
   const reports: string[] = [];
   const fixes: string[] = [];
@@ -22,6 +22,7 @@ function makeDeps(script: Script) {
     onCommandStart: () => events.push("start"),
     onCommandEnd: (ok) => events.push(ok ? "ok" : "fail"),
     report: (m) => reports.push(m),
+    consultAdvisor,
   };
   return { deps, events, reports, fixes };
 }
@@ -101,6 +102,124 @@ describe("runVerifyLoop", () => {
       aborted: () => aborted || ((aborted = true), false), // abort after first check
     });
     expect(out).toBe("aborted");
+  });
+});
+
+describe("runVerifyLoop advisor auto-consult", () => {
+  it("consults once on stuck-detection and succeeds after the advice, without touching prevSig incorrectly", async () => {
+    const advisorCalls: AdvisorStuckContext[] = [];
+    const { deps, events } = makeDeps(
+      {
+        // Two identical-signature failures trip stuck-detection; the third
+        // exec (the advisor's bonus round) passes.
+        results: [
+          { code: 1, stderr: "FAIL expected 3 to be 4 (12ms)" },
+          { code: 1, stderr: "FAIL expected 7 to be 9 (48ms)" },
+          { code: 0, stdout: "built" },
+        ],
+      },
+      async (ctx) => {
+        advisorCalls.push(ctx);
+        return "check the off-by-one in foo()";
+      },
+    );
+    const out = await runVerifyLoop("npm test", 5, deps);
+    expect(out).toBe("passed");
+    expect(advisorCalls).toHaveLength(1);
+    expect(advisorCalls[0].attempt).toBe(2);
+    expect(advisorCalls[0].maxAttempts).toBe(5);
+    expect(advisorCalls[0].log).toContain("expected 7 to be 9");
+    // exec ran 3 times: attempt1 fail, attempt2 fail (stuck), advisor bonus round pass.
+    expect(events.filter((e) => e === "start")).toHaveLength(3);
+    // fix() ran twice: the normal post-attempt-1 fix, and the advisor-guided fix.
+    expect(events.filter((e) => e === "fix")).toHaveLength(2);
+  });
+
+  it("gives the advisor's bonus round a real verify attempt even when maxAttempts is exhausted (the budget bug)", async () => {
+    // maxAttempts=2: stuck can only first trip AT attempt 2 (needs two
+    // signatures to compare), which would leave zero budget left for a
+    // normal retry — the advisor's bonus round must run outside that count.
+    const { deps, events } = makeDeps(
+      {
+        results: [
+          { code: 1, stderr: "FAIL expected 3 to be 4 (12ms)" },
+          { code: 1, stderr: "FAIL expected 7 to be 9 (48ms)" },
+          { code: 0, stdout: "built" },
+        ],
+      },
+      async () => "advice",
+    );
+    const out = await runVerifyLoop("npm test", 2, deps);
+    expect(out).toBe("passed");
+    expect(events.filter((e) => e === "start")).toHaveLength(3);
+  });
+
+  it("gives up (stuck) if the same error persists even after the advisor's bonus round, without consulting twice", async () => {
+    const advisorCalls: AdvisorStuckContext[] = [];
+    const { deps, reports } = makeDeps(
+      {
+        results: [
+          { code: 1, stderr: "FAIL expected 3 to be 4 (12ms)" },
+          { code: 1, stderr: "FAIL expected 7 to be 9 (48ms)" },
+          { code: 1, stderr: "FAIL expected 1 to be 2 (5ms)" }, // same signature again
+        ],
+      },
+      async (ctx) => {
+        advisorCalls.push(ctx);
+        return "advice that didn't help";
+      },
+    );
+    const out = await runVerifyLoop("npm test", 5, deps);
+    expect(out).toBe("stuck");
+    expect(advisorCalls).toHaveLength(1); // never consulted a second time
+    expect(reports[reports.length - 1]).toContain("🛑");
+    expect(reports[reports.length - 1]).toContain("アドバイザー");
+  });
+
+  it("resumes normal looping (not an immediate stuck) when the advice produces a genuinely different error", async () => {
+    const { deps, events } = makeDeps(
+      {
+        results: [
+          { code: 1, stderr: "FAIL expected 3 to be 4 (12ms)" },
+          { code: 1, stderr: "FAIL expected 7 to be 9 (48ms)" }, // same sig -> stuck detected
+          { code: 1, stderr: "error TS2304: Cannot find name 'bar'" }, // advisor round: different error
+          { code: 0, stdout: "built" },
+        ],
+      },
+      async () => "advice",
+    );
+    const out = await runVerifyLoop("npm test", 5, deps);
+    expect(out).toBe("passed");
+    expect(events.filter((e) => e === "start")).toHaveLength(4);
+    expect(events.filter((e) => e === "fix")).toHaveLength(3);
+  });
+
+  it("falls through to the normal stuck report when the advisor returns null", async () => {
+    const { deps, reports, fixes } = makeDeps(
+      {
+        results: [
+          { code: 1, stderr: "FAIL expected 3 to be 4 (12ms)" },
+          { code: 1, stderr: "FAIL expected 7 to be 9 (48ms)" },
+        ],
+      },
+      async () => null,
+    );
+    const out = await runVerifyLoop("npm test", 5, deps);
+    expect(out).toBe("stuck");
+    expect(fixes).toHaveLength(1); // only the normal pre-stuck fix; no advisor-guided fix
+    expect(reports[0]).toContain("🛑");
+  });
+
+  it("never consults when consultAdvisor is not provided (default OFF)", async () => {
+    const { deps, reports } = makeDeps({
+      results: [
+        { code: 1, stderr: "FAIL expected 3 to be 4 (12ms)" },
+        { code: 1, stderr: "FAIL expected 7 to be 9 (48ms)" },
+      ],
+    });
+    const out = await runVerifyLoop("npm test", 5, deps);
+    expect(out).toBe("stuck");
+    expect(reports[0]).not.toContain("アドバイザー");
   });
 });
 

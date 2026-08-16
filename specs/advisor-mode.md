@@ -1,6 +1,12 @@
-# アドバイザーモード — 設計仕様（実装前）
+# アドバイザーモード — 設計仕様
 
-作成: 1.11.1 時点。**未実装**。deepthink-v3-roadmap.md の P8〜P13 完了後、次に着手する機能として設計だけ先に固める（ひろの指示）。
+作成: 1.11.1 時点。deepthink-v3-roadmap.md の P8〜P13 完了後に着手。
+
+**実装状況**（更新中）:
+- ✅ §1 経路A（`verifyLoop.ts` の自動相談ロジック）— 実装・テスト（7ケース）・`npm test`/`npm run build` 通過済み。自分の advisor ツールによる設計レビューで3点訂正（§1 内に記録）。
+- ⬜ §1 経路B（`consult_advisor` ツール、`agent.ts`）— 未着手。
+- ⬜ §2 設定の永続化（`openrouter.rs`/`openrouter.ts`）— 未着手。
+- ⬜ §3 スレッド先（`cost.ts`/`ChatPane.tsx`/`reasoning.ts`）— 未着手。
 
 ## 0. 動機
 
@@ -28,17 +34,29 @@ if (prevSig !== null && sig === prevSig) {
 
 この関数は Agent モードの検証ループと、ディープシンクの実行フェーズ検証（frontier P1、`reasoning.ts` の `verify-exec` ブロック）の**両方から共有利用**されている（`verifyLoop.ts:1-6` のコメントに明記）ため、ここを1箇所直すだけで両方のパスに効く。
 
-**変更**: `VerifyDeps` に任意のフック `consultAdvisor?: (log: string) => Promise<string | null>` を追加。stuck 検出時、`deps.consultAdvisor` が渡されていれば（＝設定でadvisor自動相談がON、かつadvisorモデルが設定済み）、即座に "stuck" を返す前に**1回だけ**advisorへ相談し、助言が得られれば通常の `fix()` を**追加でもう1回だけ**実行してから次のループへ進む。**2回目の stuck 検出（advisor の助言後もなお同じエラー）では相談せず素直に諦める**（無限に相談し続けない・コスト制御）。
+**実装済み**（`src/lib/verifyLoop.ts`、`verifyLoop.test.ts` に7ケース追加、`npm test`/`npm run build` 通過）。設計時のドラフトに対し、自分の advisor ツールでレビューを受けて3点訂正した:
+
+1. **`prevSig` 更新漏れ**: ドラフトの `continue` はそのラウンドの `prevSig` 更新をスキップしてしまい、次ループの比較が古い signature とずれるバグがあった。→ advisor ボーナスラウンドの結果を明示的に `prevSig` へ反映してから通常ループへ戻すよう修正。
+2. **予算消費のタイミング**: ドラフトは「advisor 相談ぶんの追加 fix は通常予算内で消費」としていたが、stuck 検出は signature 比較に2回分の実行が要るため**最短でも `attempt === 2`** で発火しうる。`maxAttempts=2`（非ループモードの既定）でこれが起きると、advisor 相談後の検証を行う残り予算がゼロになり、助言が効いたかどうか一度も確認せずに `for` ループが終了してしまう（`exhausted` に落ちる隠れバグ）。→ **advisor のボーナスラウンドは `for` ループの `attempt` カウントの外側で1回だけ実行**する設計に変更。`advisorConsulted` フラグでループ全体を通して厳密に1回だけに制限されるため、全体の上限を回避する経路にはならない。
+3. **助言の文脈不足**: `consultAdvisor` に渡すのがログだけだと、advisor はタスクの目的や既に試したことを知らずに一般論しか返せない。→ `AdvisorStuckContext { log, attempt, maxAttempts }` を渡す薄いインターフェースは維持しつつ、**呼び出し元のクロージャが元のユーザー依頼をすでに把握している前提**とし、advisor へのプロンプト組み立て時に必ずそれを含めることをコメントで明記（`verifyLoop.ts` は汎用の純ロジックのままとし、タスク文脈は呼び出し側の責務とする）。
 
 ```ts
-// 概念スケッチ（実装時に確定）
-if (prevSig !== null && sig === prevSig) {
+// 実装（src/lib/verifyLoop.ts より抜粋。runOneAttempt は exec+onCommandStart/End+
+// signature計算を共通化した内部ヘルパー）
+if (prevSig !== null && r.sig === prevSig) {
   if (deps.consultAdvisor && !advisorConsulted) {
     advisorConsulted = true;
-    const advice = await deps.consultAdvisor(log);
+    const advice = await deps.consultAdvisor({ log: r.log, attempt, maxAttempts });
     if (advice) {
-      await deps.fix(buildFixPrompt(command, log) + `\n\n参考: 上位アドバイザーからの助言:\n${advice}`);
-      continue; // このラウンドは「詰まった」を確定させず、次の検証結果を見る
+      await deps.fix(buildFixPrompt(command, r.log) + `\n\n参考: 上位アドバイザーからの助言:\n${advice}`);
+      // ボーナスラウンド: for ループの attempt を消費しない（理由は上記2点目）。
+      const advised = await runOneAttempt(command, deps);
+      if (advised.kind === "passed") { /* ✅ report; return "passed" */ }
+      if (advised.sig === r.sig) { /* 🛑 advisor後も同じエラり; return "stuck" */ }
+      prevSig = advised.sig; // 進展あり。以降は通常ループへ戻す
+      if (attempt >= maxAttempts) { /* ⚠️ exhausted */ }
+      await deps.fix(buildFixPrompt(command, advised.log));
+      continue;
     }
   }
   deps.report(`🛑 ...`);
@@ -46,7 +64,7 @@ if (prevSig !== null && sig === prevSig) {
 }
 ```
 
-`maxAttempts` は変えない（advisor 相談ぶんの追加 fix はループの通常予算内で消費させる。予算を追加すると「打ち切りが効かなくなる」リスクがあるため、CLAUDE.md の上限運用方針に反しない設計にする）。
+`maxAttempts` の意味そのものは変えない（通常の fix→verify サイクルは引き続きこの予算内）。変わったのは「advisor 相談が発生した時だけ、その1回に限り予算の外で検証させる」点——CLAUDE.md の「打ち切りが効かなくなるリスクを避ける」方針には、`advisorConsulted` による**総回数1回のハードキャップ**で応える（予算無制限化ではなく、"詰まった時の最後の一手"を1回だけ許可する設計）。
 
 ### 経路B: 明示発火（ツール呼び出し・ユーザー指示ベース）
 
@@ -138,7 +156,7 @@ UI: 思考モデル・合成モデルのピッカーの並びに「アドバイ�
 - `reasoning.ts` の P1 実行検証ブロック（`runVerifyLoop` 呼び出し、`reasoning.ts:772` 付近）の `deps` に `consultAdvisor` を配線（`opts.advisorModel` があるときのみ）。
 - ChatPane.tsx の Agent モード呼び出し（非ディープシンク）にも同様に配線——`runVerifyLoop` を直接呼んでいる箇所（Agent モードの検証ループ）に同じ `consultAdvisor` フックを渡す。
 
-分析パイプライン（brief/investigate/judge/final）への統合は**見送り**（§5参照）。
+分析パイプライン（brief/investigate/judge/final/beam）への統合は**見送り**（§5参照）。**この見送りは `ReasoningOptions.advisorModel` を配線する場所で担保する**——`reasoning.ts` の `think()`（`brief`/`investigate`/`judge`/`final`/beam 各フェーズが共通で使う内部ヘルパー、`reasoning.ts:572`〜）が組み立てる `runAgent` の options オブジェクト（`reasoning.ts:592`〜）には `advisorModel` を**足さない**。`advisorModel` を渡すのは実行フェーズ専用の `execOpts`（`reasoning.ts:776`）だけとする。こうすれば `consult_advisor` は `opts.advisorModel` 条件で自動的に execute フェーズ以外では advertise されず、投資フェーズごとに個別のガードを書く必要がない（advisor design review で指摘: 配線先を1つ間違えると調査サブフェーズが consult_advisor を呼び始め、コストが見えない形で増える）。
 
 ## 4. コスト・pipelineShape整合
 
