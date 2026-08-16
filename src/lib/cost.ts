@@ -158,6 +158,13 @@ export interface PipelineShape {
   /** The optional post-execution grounded review (strong, plain — a single
    * CRITERIA/CONSTRAINTS check against the diff). 0 unless it actually ran. */
   execReview: number;
+  /** Advisor auto-consult (advisor-mode.md §1 経路A): one plain completion to
+   * the (separately-configured) advisor model, fired at most once per run when
+   * the execute phase's verify loop hits stuck-detection. 0 unless it actually
+   * fired. Only meaningful when `execute` is 1 — Agent mode's own verify loop
+   * also supports advisor auto-consult but is outside this deep-reasoning cost
+   * model entirely (it has no pipelineShape of its own). */
+  advisorConsult: number;
 }
 
 // Counts normal-path calls only; the empty-output retry in reasoning.ts
@@ -187,6 +194,12 @@ export function pipelineShape(
   /** The optional grounded review (P10 §3) actually ran this run. Only
    * meaningful when `execPath` is true. */
   execReview = false,
+  /** Advisor auto-consult (advisor-mode.md §1) actually fired this run. Same
+   * asymmetry rule as `execPath`/`execReview`: the PRE-SEND estimate must
+   * never pass this (stuck-detection is data-dependent and unknowable before
+   * the run), only POST-RUN calibration passes the run's actual outcome. Only
+   * meaningful when `execPath` is true. */
+  advisorConsult = false,
 ): PipelineShape {
   const breadth = Math.max(1, Math.min(5, Math.floor(samples)));
   const d = Math.max(0, Math.floor(depth));
@@ -219,6 +232,7 @@ export function pipelineShape(
       beamJudge: 0,
       execute: 1,
       execReview: execReview ? 1 : 0,
+      advisorConsult: advisorConsult ? 1 : 0,
     };
   }
   return {
@@ -238,15 +252,17 @@ export function pipelineShape(
     beamJudge: beam ? BW : 0,
     execute: 0,
     execReview: 0,
+    advisorConsult: 0,
   };
 }
 
 /** Agent-loop vs plain structural call totals — the calibration divides observed
  * loop round-trips by `loop` to learn the tool multiplier, exactly the count the
- * estimate multiplies by it. `execPath`/`execReview` (P10): pass the run's
- * ACTUAL route once known — this is the post-run calibration caller, not the
- * pre-send estimate, so unlike `estimateDeepReasoningCost` it is correct (and
- * necessary) to pass them here. See `pipelineShape`'s `execPath` doc comment. */
+ * estimate multiplies by it. `execPath`/`execReview`/`advisorConsult` (P10 /
+ * advisor-mode.md §1): pass the run's ACTUAL route once known — this is the
+ * post-run calibration caller, not the pre-send estimate, so unlike
+ * `estimateDeepReasoningCost` it is correct (and necessary) to pass them here.
+ * See `pipelineShape`'s `execPath` doc comment. */
 export function structuralCalls(
   depth: number,
   samples: number,
@@ -257,6 +273,7 @@ export function structuralCalls(
   beam = false,
   execPath = false,
   execReview = false,
+  advisorConsult = false,
 ): { loop: number; plain: number } {
   const s = pipelineShape(
     depth,
@@ -268,6 +285,7 @@ export function structuralCalls(
     beam,
     execPath,
     execReview,
+    advisorConsult,
   );
   return {
     loop: s.invest + s.refine + s.draftLoop + s.finalLoop + s.subtask + s.beamBranch + s.execute,
@@ -280,7 +298,8 @@ export function structuralCalls(
       s.finalPlain +
       s.compose +
       s.beamJudge +
-      s.execReview,
+      s.execReview +
+      s.advisorConsult,
   };
 }
 

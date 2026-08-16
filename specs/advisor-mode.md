@@ -4,9 +4,10 @@
 
 **実装状況**（更新中）:
 - ✅ §1 経路A（`verifyLoop.ts` の自動相談ロジック）— 実装・テスト（7ケース）・`npm test`/`npm run build` 通過済み。自分の advisor ツールによる設計レビューで3点訂正（§1 内に記録）。
+- ✅ §4 コスト整合（`cost.ts` の `PipelineShape.advisorConsult`）— 実装・テスト（6ケース）・`npm test`/`npm run build` 通過済み。`execReview` と同じ非対称ルール（事前概算は発火を仮定しない）を踏襲。`ChatPane.tsx` の `structuralCalls` 呼び出しへの `advisorConsult` 実引数配線は §3（`reasoning.ts`/`ChatPane.tsx` の実行フェーズ配線）とセットで行う——それまでは省略時解釈の `false` のままで安全（advisorConsult 自体がまだどこからも発火しない）。
 - ⬜ §1 経路B（`consult_advisor` ツール、`agent.ts`）— 未着手。
 - ⬜ §2 設定の永続化（`openrouter.rs`/`openrouter.ts`）— 未着手。
-- ⬜ §3 スレッド先（`cost.ts`/`ChatPane.tsx`/`reasoning.ts`）— 未着手。
+- ⬜ §3 スレッド先（`ChatPane.tsx`/`reasoning.ts`）— 未着手。
 
 ## 0. 動機
 

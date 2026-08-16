@@ -84,6 +84,7 @@ describe("pipelineShape", () => {
       beamJudge: 0,
       execute: 0,
       execReview: 0,
+      advisorConsult: 0,
     });
   });
 
@@ -195,6 +196,15 @@ describe("pipelineShape", () => {
   it("execReview is ignored when execPath is false", () => {
     expect(pipelineShape(1, 1, true, 2, 1, false, false, false, true).execReview).toBe(0);
   });
+
+  it("advisorConsult (advisor-mode.md §1) counts a plain call only when it actually fired", () => {
+    expect(pipelineShape(1, 1, true, 2, 1, false, false, true, false, false).advisorConsult).toBe(0);
+    expect(pipelineShape(1, 1, true, 2, 1, false, false, true, false, true).advisorConsult).toBe(1);
+  });
+
+  it("advisorConsult is ignored when execPath is false", () => {
+    expect(pipelineShape(1, 1, true, 2, 1, false, false, false, false, true).advisorConsult).toBe(0);
+  });
 });
 
 describe("structuralCalls", () => {
@@ -234,5 +244,20 @@ describe("structuralCalls", () => {
 
   it("execPath with execReview: the review call is counted as plain (strong, no tools)", () => {
     expect(structuralCalls(3, 3, true, 2, 1, false, false, true, true)).toEqual({ loop: 1, plain: 3 });
+  });
+
+  it("execPath with advisorConsult: the advisor call is counted as plain (single completion)", () => {
+    // classify(1) + brief(1) + advisorConsult(1) plain; execute(1) loop; no review.
+    expect(structuralCalls(3, 3, true, 2, 1, false, false, true, false, true)).toEqual({
+      loop: 1,
+      plain: 3,
+    });
+  });
+
+  it("execPath with both execReview and advisorConsult: both add to plain independently", () => {
+    expect(structuralCalls(3, 3, true, 2, 1, false, false, true, true, true)).toEqual({
+      loop: 1,
+      plain: 4,
+    });
   });
 });
