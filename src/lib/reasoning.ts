@@ -30,6 +30,7 @@ import { recordDefects, defectReminder } from "./defectMemory";
 import { taskKeyFor, buildCachedFactsMessage, recordVerifiedFacts } from "./evidenceCache";
 import { recordModelRun } from "./modelLedger";
 import { extractCitations, validateCitations, downgradeUnverifiedCitations } from "./citations";
+import { compactEvidence } from "./evidence";
 
 /** Extract the current user question from the base messages (last user turn),
  * for scoping the evidence cache (P4) to this task. */
@@ -488,16 +489,16 @@ function clip(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + "\n…(以下省略)" : text;
 }
 
-/** Join findings within the evidence budget, but give each one a fair share so
- * a blind tail-truncation can't drop whole later findings (esp. with breadth=5). */
+/** Join findings within the evidence budget, preserving structure (P11): every
+ * VERIFIED fact (deduped by citation) is kept whole or evicted — never
+ * truncated mid-line — UNKNOWN is always represented at least as a count, and
+ * ASSUMPTIONS/prose take whatever budget remains. See `lib/evidence.ts`. */
 function joinEvidence(findings: string[]): string {
-  const joined = findings.join("\n\n");
-  if (joined.length <= MAX_EVIDENCE_CHARS || findings.length <= 1) {
-    return clip(joined, MAX_EVIDENCE_CHARS);
+  const { text, evictedVerified } = compactEvidence(findings, MAX_EVIDENCE_CHARS);
+  if (evictedVerified > 0) {
+    console.log(`[deepthink] evidence · 予算のため VERIFIED ${evictedVerified}件を省略`);
   }
-  const sepCost = 2 * (findings.length - 1);
-  const budget = Math.max(400, Math.floor((MAX_EVIDENCE_CHARS - sepCost) / findings.length));
-  return findings.map((f) => clip(f, budget)).join("\n\n");
+  return text;
 }
 
 export async function runRecurrentReasoning(
