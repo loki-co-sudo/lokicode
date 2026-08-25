@@ -110,6 +110,10 @@ export interface ReasoningOptions {
   /** Workspace root, passed through to the agent phases so grep_search's
    * default root and run_command's default cwd work inside deep-think. */
   workspaceRoot?: string;
+  /** Passed through to every agent phase's AgentOptions — see agent.ts's
+   * AgentOptions.extraAllowedPaths (narrow exact-path allowlist for the global
+   * rules file, outside the workspace). */
+  extraAllowedPaths?: string[];
   /** Mixture-of-Agents (parallel proposer drafts + best-of-N final). Default on;
    * turn off to trade a little quality for speed/cost. */
   ensemble?: boolean;
@@ -608,6 +612,7 @@ export async function runRecurrentReasoning(
             approval: opts.approval,
             model,
             workspaceRoot: opts.workspaceRoot,
+            extraAllowedPaths: opts.extraAllowedPaths,
             signal: opts.signal,
             readOnly: o.readOnly,
             cancelId: opts.runId,
@@ -787,6 +792,7 @@ export async function runRecurrentReasoning(
         approval: opts.approval,
         model: exModel,
         workspaceRoot: opts.workspaceRoot,
+        extraAllowedPaths: opts.extraAllowedPaths,
         signal: opts.signal,
         readOnly: false,
         cancelId: opts.runId,

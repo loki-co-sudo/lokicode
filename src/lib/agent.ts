@@ -357,12 +357,29 @@ export function withinWorkspace(target: string, root: string): boolean {
   return t === r || t.startsWith(r + "/");
 }
 
+/** Is `target` exactly one of `allowed` (normalized, exact match only — never a
+ * prefix/directory check). Used for narrow single-file exceptions (e.g. the
+ * global `~/.lokicode/rules` file) that must NOT open up the whole containing
+ * directory, which may hold unrelated secrets (e.g. `~/.lokicode/updater.key`,
+ * the auto-update signing key). */
+function isExactlyAllowed(target: string, allowed: string[]): boolean {
+  const t = normAbs(target);
+  return allowed.some((a) => normAbs(a) === t);
+}
+
 /** Enforce the workspace-restriction setting on a tool call: returns a denial
- * string when a path argument escapes the workspace, else null (allowed). */
-function workspaceGuard(
+ * string when a path argument escapes the workspace, else null (allowed).
+ * `extraAllowedPaths` is a narrow, explicit exact-path allowlist (read_file /
+ * write_file only) for files outside the workspace that should stay editable
+ * even with the restriction on — e.g. the global rules file. It intentionally
+ * does NOT apply to list_dir/grep_search/run_command, since listing the parent
+ * directory would reveal other files in it (like the updater signing key). */
+/** Exported for testing (see agent.test.ts's extraAllowedPaths coverage). */
+export function workspaceGuard(
   name: string,
   args: Record<string, unknown>,
   workspaceRoot?: string,
+  extraAllowedPaths?: string[],
 ): string | null {
   if (!workspaceRoot || !getRestrictToWorkspace()) return null;
   const candidate =
@@ -374,6 +391,13 @@ function workspaceGuard(
           ? args.cwd // optional; undefined → defaults to the workspace root (safe)
           : undefined;
   if (typeof candidate === "string" && candidate && !withinWorkspace(candidate, workspaceRoot)) {
+    if (
+      (name === "read_file" || name === "write_file") &&
+      extraAllowedPaths &&
+      isExactlyAllowed(candidate, extraAllowedPaths)
+    ) {
+      return null;
+    }
     return (
       `拒否: 設定「ワークスペース外へのアクセスを制限」が有効です。` +
       `ワークスペース(${workspaceRoot})の外のパスは操作できません: ${candidate}`
@@ -386,8 +410,9 @@ async function execTool(
   name: string,
   args: Record<string, unknown>,
   workspaceRoot?: string,
+  extraAllowedPaths?: string[],
 ): Promise<string> {
-  const denied = workspaceGuard(name, args, workspaceRoot);
+  const denied = workspaceGuard(name, args, workspaceRoot, extraAllowedPaths);
   if (denied) return denied;
   switch (name) {
     case "read_file":
@@ -479,6 +504,12 @@ export interface AgentOptions {
   model?: string;
   /** Workspace root; default cwd for run_command and search root for grep_search. */
   workspaceRoot?: string;
+  /** Narrow exact-path allowlist for read_file/write_file outside the workspace
+   * (e.g. the global `~/.lokicode/rules` file), honored even when "restrict to
+   * workspace" is on. Exact match only — never treated as a directory grant, so
+   * it can't be used to reach sibling files (see workspaceGuard/isExactlyAllowed
+   * in this file and specs/global-rules.md). */
+  extraAllowedPaths?: string[];
   signal?: { aborted: boolean };
   /** Restrict to read-only tools (no write_file/run_command): lets investigation
    * phases run unattended and in parallel without approval prompts. */
@@ -719,7 +750,7 @@ export async function runAgent(
       if (status !== "denied") {
         const toolStart = performance.now();
         try {
-          result = await execTool(name, args, opts.workspaceRoot);
+          result = await execTool(name, args, opts.workspaceRoot, opts.extraAllowedPaths);
         } catch (err) {
           status = "error";
           result = "エラー: " + (err instanceof Error ? err.message : String(err));

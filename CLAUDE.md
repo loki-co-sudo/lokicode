@@ -58,7 +58,7 @@ API キーは `.env`（`.gitignore` 済み）の `VITE_OPENROUTER_API_KEY` か�
 | コスト概算（**pipelineShape が呼び出し回数の唯一の真実源**） | `src/lib/cost.ts` |
 | 検証ループ（変更→検証→修正。Agent とディープ実行フェーズが共用） | `src/lib/verifyLoop.ts`（純ロジックは `loop.ts`） |
 | モデル要件ゲート・実効レベル推定 | `src/lib/modelGate.ts` |
-| システムプロンプト（エージェントへの命令文） | `src/components/ChatPane.tsx` の `buildSystemPrompt` |
+| システムプロンプト（エージェントへの命令文） | `src/lib/systemPrompt.ts` の `buildSystemPrompt`（呼び出しは `ChatPane.tsx`。グローバル/プロジェクト指示ファイルの合成は [specs/global-rules.md](specs/global-rules.md)） |
 | 設計仕様（**変更前に該当 spec を必ず読む**。索引から入る） | `specs/README.md`（索引・現状ノートの場所） |
 | 今後の改善計画（**次に何を実装すべきか**・実装スケッチつき） | `specs/frontier-roadmap.md` |
 

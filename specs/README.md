@@ -25,6 +25,7 @@
 | ファイル | 内容 |
 | --- | --- |
 | [architecture.md](architecture.md) | アプリ全体の基盤設計（Tauri/フロント構成） |
+| [global-rules.md](global-rules.md) | グローバル指示ファイル（`~/.lokicode/rules`。全プロジェクト共通、`.lokicode/rules` と併用） |
 | [agent-claude-code.md](agent-claude-code.md) | エージェント設計の参考メモ |
 | [git-diff-branch.md](git-diff-branch.md) / [github-login.md](github-login.md) / [updater.md](updater.md) | Git/GitHub/自動更新の各機能仕様 |
 | [terminal-shell-selection.md](terminal-shell-selection.md) | 統合ターミナルのシェル選択（pwsh/powershell/cmd・Unixは/etc/shells検出） |

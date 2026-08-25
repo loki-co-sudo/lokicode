@@ -3,11 +3,23 @@ import {
   commandRisk,
   toolNeedsApproval,
   withinWorkspace,
+  workspaceGuard,
   initPathCaseSensitivity,
   advertisedTools,
   CONSULT_ADVISOR_TOOL,
   ASK_USER_TOOL,
 } from "./agent";
+
+// Minimal in-memory localStorage (node test env has none) — workspaceGuard
+// reads getRestrictToWorkspace(), which reads localStorage directly.
+function installLocalStorage() {
+  const store = new Map<string, string>();
+  (globalThis as Record<string, unknown>).localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+}
 
 describe("commandRisk", () => {
   it("treats read-only commands as safe (incl. PowerShell Format-*)", () => {
@@ -111,5 +123,89 @@ describe("withinWorkspace path case-sensitivity (initPathCaseSensitivity)", () =
     expect(withinWorkspace("/Home/X/file.ts", "/home/x")).toBe(false);
     // Same-case still matches.
     expect(withinWorkspace("/home/x/file.ts", "/home/x")).toBe(true);
+  });
+});
+
+describe("workspaceGuard extraAllowedPaths (global rules file exception, specs/global-rules.md)", () => {
+  installLocalStorage();
+  const workspaceRoot = "/home/loki/projects/some-app";
+  const allowed = ["/home/loki/.lokicode/rules", "/home/loki/.lokicode/rules.md"];
+
+  it("allows read_file on an exact allowlisted path outside the workspace", () => {
+    expect(
+      workspaceGuard("read_file", { path: "/home/loki/.lokicode/rules.md" }, workspaceRoot, allowed),
+    ).toBeNull();
+  });
+
+  it("allows write_file on an exact allowlisted path outside the workspace", () => {
+    expect(
+      workspaceGuard(
+        "write_file",
+        { path: "/home/loki/.lokicode/rules.md", content: "x" },
+        workspaceRoot,
+        allowed,
+      ),
+    ).toBeNull();
+  });
+
+  it("still denies a DIFFERENT file in the same directory (e.g. the updater signing key)", () => {
+    const denial = workspaceGuard(
+      "read_file",
+      { path: "/home/loki/.lokicode/updater.key" },
+      workspaceRoot,
+      allowed,
+    );
+    expect(denial).not.toBeNull();
+    expect(denial).toContain("拒否");
+  });
+
+  it("still denies write_file on the signing key even though rules.md is allowed", () => {
+    const denial = workspaceGuard(
+      "write_file",
+      { path: "/home/loki/.lokicode/updater.key", content: "x" },
+      workspaceRoot,
+      allowed,
+    );
+    expect(denial).not.toBeNull();
+  });
+
+  it("still denies list_dir on the containing directory (would reveal the signing key)", () => {
+    const denial = workspaceGuard("list_dir", { path: "/home/loki/.lokicode" }, workspaceRoot, allowed);
+    expect(denial).not.toBeNull();
+  });
+
+  it("still denies grep_search rooted outside the workspace, even at an allowlisted path", () => {
+    const denial = workspaceGuard(
+      "grep_search",
+      { path: "/home/loki/.lokicode/rules.md", query: "x" },
+      workspaceRoot,
+      allowed,
+    );
+    expect(denial).not.toBeNull();
+  });
+
+  it("still denies run_command with cwd outside the workspace, even at an allowlisted path", () => {
+    const denial = workspaceGuard(
+      "run_command",
+      { command: "ls", cwd: "/home/loki/.lokicode" },
+      workspaceRoot,
+      allowed,
+    );
+    expect(denial).not.toBeNull();
+  });
+
+  it("denies the allowlisted path when extraAllowedPaths is omitted (no accidental opt-in)", () => {
+    const denial = workspaceGuard("read_file", { path: "/home/loki/.lokicode/rules.md" }, workspaceRoot);
+    expect(denial).not.toBeNull();
+  });
+
+  it("path traversal through an allowlisted filename cannot reach a sibling secret", () => {
+    const denial = workspaceGuard(
+      "read_file",
+      { path: "/home/loki/.lokicode/rules.md/../updater.key" },
+      workspaceRoot,
+      allowed,
+    );
+    expect(denial).not.toBeNull();
   });
 });
