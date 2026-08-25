@@ -443,6 +443,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   }, [costLimit]);
   const overLimit = costLimit > 0 && usage.cost >= costLimit;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<{ aborted: boolean }>({ aborted: false });
   const runIdRef = useRef<number>(0);
@@ -643,8 +644,21 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
   }, [samples]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    const el = scrollRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTo({ top: el.scrollHeight });
   }, [items, busy, pending]);
+
+  // Track whether the user is parked near the bottom so the effect above
+  // only auto-follows new output when they haven't scrolled up to read
+  // earlier messages. A manual scroll away from the bottom disables
+  // auto-follow until they scroll back down themselves.
+  const handleChatScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 80;
+  };
 
   // Auto-grow the input with its content (capped).
   useEffect(() => {
@@ -854,6 +868,7 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
       if (!ok) return;
     }
 
+    stickToBottomRef.current = true;
     const history = historyFromItems(items);
     appendItem({ kind: "user", content: text });
     setInput("");
@@ -1458,7 +1473,11 @@ const ChatPane = forwardRef<ChatPaneHandle, ChatPaneProps>(function ChatPane(
         </div>
       )}
 
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+      <div
+        ref={scrollRef}
+        onScroll={handleChatScroll}
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+      >
         <Profiler id="chat" onRender={onChatRender}>
         {items.length === 0 && (
           <p className="mt-8 text-center text-sm text-neutral-600">
